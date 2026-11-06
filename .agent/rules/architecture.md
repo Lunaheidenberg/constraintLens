@@ -1,0 +1,7 @@
+# SYSTEM RULES
+1. Tuân thủ & Đóng băng IR: Mọi dữ liệu vào/ra phải tuân thủ nghiêm ngặt cấu trúc trong models.py. Tuyệt đối cấm tự ý sửa đổi file models.py. Nếu AI thấy thiếu trường dữ liệu, phải dừng lại và hỏi ý kiến người dùng.
+2. GKiến trúc Không trạng thái (Stateless): Giao diện chỉ dùng Streamlit, cấm vẽ vời database ngoài (như SQLite).
+3. Quản lý vòng đời (Lifecycle): Vì Streamlit chạy lại (rerun) toàn bộ script từ trên xuống dưới mỗi khi người dùng bấm nút, mọi dữ liệu quan trọng (bản IR, kết quả lịch trình từ thuật toán) bắt buộc phải được lưu trữ trong st.session_state để không bị mất khi giao diện tải lại.
+4. Validation First: Trong file validator.py, bắt buộc phải cài đặt thuật toán phát hiện chu trình đồ thị có hướng (DAG Cycle Detection). Nếu phát hiện công việc bị phụ thuộc vòng tròn (VD: A đợi B, B đợi A), hệ thống phải chặn lại và hiển thị cảnh báo ngay lập tức, không được phép đưa vào Solver.
+5. Kỷ luật CP-SAT: Khi viết thuật toán giải ràng buộc trong solver.py, chỉ dùng Google OR-Tools CP-SAT. Giới hạn WIP Limit của Kanban bắt buộc xử lý bằng hàm model.AddCumulative().
+6. Chống ảo giác Toán học: Tuyệt đối không tự bịa ra các hàm OR-Tools không tồn tại (như model.AddMax()). Phải khởi tạo đúng định dạng biến khoảng thời gian (NewIntervalVar) trước khi đưa chúng vào hàm AddCumulative(). Hãy viết code đơn giản, trực diện, không lạm dụng kế thừa đa hình (polymorphism) phức tạp không cần thiết.
