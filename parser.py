@@ -15,6 +15,8 @@ SDK: google-genai (mới) thay cho google-generativeai (deprecated).
 
 import json
 import os
+import re
+import time
 from typing import Any
 
 from google import genai
@@ -101,7 +103,12 @@ def _pydantic_to_genai_schema(model_class: type) -> dict[str, Any]:
 # Hàm chính
 # ---------------------------------------------------------------------------
 
-def parse_kanban_prompt(user_text: str, api_key: str) -> SchedulingIR:
+def parse_kanban_prompt(
+    user_text: str,
+    api_key: str,
+    model: str = "gemini-3.5-flash",
+    timeout_ms: int = 30000,
+) -> SchedulingIR:
     """
     Phân tích mô tả dự án bằng Gemini Flash và trả về SchedulingIR.
 
@@ -111,6 +118,10 @@ def parse_kanban_prompt(user_text: str, api_key: str) -> SchedulingIR:
         Đoạn mô tả dự án bằng ngôn ngữ tự nhiên từ người dùng.
     api_key : str
         Google Generative AI API key.
+    model : str
+        Tên model Gemini sử dụng (mặc định: 'gemini-3.5-flash').
+    timeout_ms : int
+        Thời gian chờ tối đa cho request tính bằng mili-giây (mặc định: 30000ms = 30s).
 
     Returns
     -------
@@ -118,59 +129,90 @@ def parse_kanban_prompt(user_text: str, api_key: str) -> SchedulingIR:
         Đối tượng IR đã được Pydantic validate, sẵn sàng đưa vào validator/solver.
     """
 
-    # 1. Khởi tạo client (SDK mới: google-genai)
-    client = genai.Client(api_key=api_key)
+    # 1. Khởi tạo client (SDK mới: google-genai) với timeout rõ ràng
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=timeout_ms),
+    )
 
     # 2. System Prompt
     system_prompt = (
-        "Bạn là một trợ lý trích xuất dữ liệu chuyên nghiệp. "
+        "Bạn là một trợ lý trích xuất dữ liệu chuyên nghiệp.\n"
         "Hãy phân tích đoạn mô tả dự án của người dùng và thực hiện các bước sau:\n"
-        "  1. Xác định tên dự án và tổng số thành viên nhóm (team_capacity).\n"
+        "  1. Xác định tên dự án và tổng số thành viên nhóm (team_capacity >= 1).\n"
         "  2. Phân tách các cột Kanban theo đúng thứ tự luồng công việc (stages).\n"
-        "  3. Trích xuất giới hạn WIP (wip_limits) cho từng cột được đề cập; "
-        "nếu một cột không được nêu giới hạn, hãy suy luận giá trị hợp lý "
-        "dựa trên số thành viên hoặc bỏ qua cột đó.\n"
+        "  3. Trích xuất giới hạn WIP (wip_limits) thành dictionary với key là tên cột và value là số nguyên giới hạn WIP.\n"
+        "     Ví dụ: nếu văn bản ghi 'Cột Review tối đa 2 thẻ, Cột Backend tối đa 3 thẻ' thì kanban_config.wip_limits phải là {\"Review\": 2, \"Backend\": 3}.\n"
+        "     Tuyệt đối không để trống kanban_config.wip_limits nếu trong bài có đề cập giới hạn số thẻ/WIP.\n"
         "  4. Liệt kê toàn bộ các thẻ công việc (tasks), mỗi thẻ gồm: "
-        "id (T1, T2, ...), name, duration (ngày, số nguyên dương), "
-        "dependencies (list id tiên quyết, để rỗng nếu không có), "
-        "kanban_stage (tên cột Kanban mà thẻ thuộc về).\n"
-        "Chỉ trả về JSON theo đúng schema được cung cấp, không giải thích thêm."
+        "id (T1, T2, ...), name, duration (ngày, số nguyên dương >= 1), "
+        "dependencies (danh sách id công việc tiên quyết, rỗng nếu không có), "
+        "kanban_stage (tên cột Kanban tương ứng).\n"
+        "Chỉ trả về JSON theo đúng schema, không giải thích thêm."
     )
 
     # 3. Chuyển Pydantic schema → dict an toàn cho GenAI proto
     genai_schema = _pydantic_to_genai_schema(SchedulingIR)
 
-    # 4. Gọi API với retry cho lỗi tạm thời (503, 429, ...)
-    import time
-
+    # 4. Gọi API với retry và fallback cho lỗi tạm thời (503, 429, 504)
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=genai_schema,
         system_instruction=system_prompt,
     )
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=user_text,
-                config=config,
-            )
-            break  # Thành công → thoát vòng lặp
-        except Exception as e:
-            error_msg = str(e)
-            if ("503" in error_msg or "429" in error_msg) and attempt < max_retries - 1:
-                wait_seconds = 2 ** (attempt + 1)  # 2s, 4s
-                print(f"⏳ Server đang bận, thử lại sau {wait_seconds}s... (lần {attempt + 2}/{max_retries})")
-                time.sleep(wait_seconds)
-            else:
-                raise  # Lỗi khác hoặc hết retry → ném lỗi ra ngoài
+    models_to_try = [model]
+    if "gemini-3.5-flash-lite" not in models_to_try:
+        models_to_try.append("gemini-3.5-flash-lite")
+
+    response = None
+    last_error = None
+
+    for current_model in models_to_try:
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=current_model,
+                    contents=user_text,
+                    config=config,
+                )
+                break
+            except Exception as e:
+                last_error = e
+                error_msg = str(e)
+                # Xử lý các lỗi tạm thời từ server Google
+                if ("503" in error_msg or "429" in error_msg or "504" in error_msg) and attempt < max_retries - 1:
+                    wait_seconds = 2 ** (attempt + 1)
+                    print(f"⏳ [{current_model}] Server đang bận, thử lại sau {wait_seconds}s... (lần {attempt + 2}/{max_retries})")
+                    time.sleep(wait_seconds)
+                else:
+                    break
+
+        if response is not None:
+            break
+
+    if response is None:
+        raise RuntimeError(f"Không thể gọi Gemini API sau khi thử các model {models_to_try}: {last_error}")
 
     # 5. Parse JSON → Pydantic (double-validate theo Rule #1 architecture.md)
     raw_json: str = response.text
     data: dict = json.loads(raw_json)
     ir = SchedulingIR.model_validate(data)
+
+    # 6. Bổ trợ wip_limits: Google GenAI Developer API không hỗ trợ additionalProperties trong schema,
+    # nên grammar-constrained decoding có thể trả về dict rỗng {}.
+    # Nếu wip_limits rỗng, trích xuất bổ sung từ văn bản dựa trên danh sách stages đã nhận diện.
+    if not ir.kanban_config.wip_limits and ir.kanban_config.stages:
+        inferred_wips: dict[str, int] = {}
+        for stage in ir.kanban_config.stages:
+            p1 = rf"{re.escape(stage)}[^\n\.]*?(?:tối đa|giới hạn|WIP\s*=?)\s*(\d+)"
+            p2 = rf"(?:tối đa|giới hạn|WIP\s*=?)\s*(\d+)[^\n\.]*?{re.escape(stage)}"
+            m = re.search(p1, user_text, re.IGNORECASE) or re.search(p2, user_text, re.IGNORECASE)
+            if m:
+                inferred_wips[stage] = int(m.group(1))
+        if inferred_wips:
+            ir.kanban_config.wip_limits = inferred_wips
 
     return ir
 
@@ -180,12 +222,25 @@ def parse_kanban_prompt(user_text: str, api_key: str) -> SchedulingIR:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    from pathlib import Path
+
     API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+    # Tự động nạp từ .env nếu chưa nạp vào biến môi trường
+    if not API_KEY and Path(".env").exists():
+        with open(".env", "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("GEMINI_API_KEY="):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    API_KEY = val
+                    os.environ["GEMINI_API_KEY"] = API_KEY
+                    break
 
     if not API_KEY:
         raise EnvironmentError(
             "Chưa có GEMINI_API_KEY. "
-            "Hãy đặt biến môi trường hoặc điền thẳng vào biến API_KEY trong file này."
+            "Hãy đặt biến môi trường hoặc cấu hình trong file .env."
         )
 
     sample_text = """
