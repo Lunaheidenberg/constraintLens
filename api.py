@@ -341,3 +341,4 @@ def solve_project_schedule(payload: SolveRequest):
         result=result,
         rescue_suggestions=rescue_suggestions,
     )
+
