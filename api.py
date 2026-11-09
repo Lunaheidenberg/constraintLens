@@ -11,11 +11,11 @@ Cung cấp các API:
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from models import KanbanConfig, SchedulingIR, Task
 from parser import parse_kanban_prompt
@@ -157,6 +157,25 @@ class SolveRequest(BaseModel):
     ir: SchedulingIR = Field(description="Cấu hình SchedulingIR của dự án.")
     target_deadline: Optional[int] = Field(default=None, description="Mục tiêu deadline (số ngày).")
     time_limit_sec: Optional[float] = Field(default=10.0, description="Giới hạn thời gian giải toán CP-SAT.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_flexible_payload(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Form 1: Đã bọc trong key 'ir'
+            if "ir" in data:
+                return data
+            # Form 2: Gửi trực tiếp cấu trúc SchedulingIR ở root (kèm target_deadline/time_limit_sec nếu có)
+            if "tasks" in data:
+                data_copy = dict(data)
+                target_deadline = data_copy.pop("target_deadline", None)
+                time_limit_sec = data_copy.pop("time_limit_sec", 10.0)
+                return {
+                    "ir": data_copy,
+                    "target_deadline": target_deadline,
+                    "time_limit_sec": time_limit_sec,
+                }
+        return data
 
 
 class SolveResponse(BaseModel):

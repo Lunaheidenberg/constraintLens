@@ -129,12 +129,18 @@ export interface SolveResponse {
 
 /**
  * Payload yêu cầu giải bài toán lập lịch POST /api/solve.
+ * Hỗ trợ cả 2 dạng: bọc trong { ir, ... } hoặc gửi trực tiếp SchedulingIR ở root.
  */
-export interface SolveRequest {
-  ir: SchedulingIR;
-  target_deadline?: number | null;
-  time_limit_sec?: number;
-}
+export type SolveRequest =
+  | {
+      ir: SchedulingIR;
+      target_deadline?: number | null;
+      time_limit_sec?: number;
+    }
+  | (SchedulingIR & {
+      target_deadline?: number | null;
+      time_limit_sec?: number;
+    });
 
 /**
  * Payload yêu cầu phân tích ngôn ngữ tự nhiên POST /api/parse.
@@ -164,3 +170,4 @@ export interface PresetScenario {
  * Bản đồ ánh xạ kịch bản mẫu từ API: Record<tên_kịch_bản, SchedulingIR>.
  */
 export type PresetsMap = Record<string, SchedulingIR>;
+
