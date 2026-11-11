@@ -41,7 +41,9 @@ def _normalize_cycle(cycle_nodes: list[str]) -> tuple[str, ...]:
     return tuple(rotated)
 
 
-def validate_ir(ir: SchedulingIR, raise_on_error: bool = False) -> list[str]:
+def validate_ir(
+    ir: SchedulingIR, raise_on_error: bool = False, *, require_assignments: bool = False
+) -> list[str]:
     """
     Kiểm tra toàn diện tính hợp lệ của đối tượng SchedulingIR trước khi giải bài toán.
 
@@ -50,11 +52,14 @@ def validate_ir(ir: SchedulingIR, raise_on_error: bool = False) -> list[str]:
     2. Kiểm tra tính toàn vẹn cột Kanban & WIP Limits (phạm vi giá trị, tên cột hợp lệ).
     3. Kiểm tra tính toàn vẹn tham chiếu phụ thuộc (không tự phụ thuộc, không phụ thuộc ID ma).
     4. Phát hiện chu trình phụ thuộc vòng tròn bằng thuật toán DFS 3 màu (DAG Cycle Detection).
+    5. Kiểm tra ID thành viên duy nhất và tham chiếu người được phân công.
 
     Args:
         ir: Đối tượng SchedulingIR cần kiểm tra.
         raise_on_error: Nếu True và có lỗi, ném ra ngoại lệ SchedulingValidationError(errors).
                         Mặc định là False (chỉ trả về danh sách lỗi).
+        require_assignments: Yêu cầu mỗi task có người phụ trách khi kiểm tra
+                             dữ liệu để chuẩn bị cho lịch theo thành viên.
 
     Returns:
         list[str]: Danh sách các chuỗi thông báo lỗi bằng tiếng Việt (rỗng [] nếu hợp lệ).
@@ -93,6 +98,22 @@ def validate_ir(ir: SchedulingIR, raise_on_error: bool = False) -> list[str]:
         errors.append(
             f"Mã công việc (Task ID) '{dup_id}' bị trùng lặp. Mỗi task phải có một ID duy nhất."
         )
+
+    member_ids: set[str] = set()
+    for member in ir.members:
+        if member.id in member_ids:
+            errors.append(f"Mã thành viên '{member.id}' bị trùng lặp. Hãy dùng một ID duy nhất cho mỗi thành viên.")
+        member_ids.add(member.id)
+
+    for task in tasks:
+        if task.assignee_id is None:
+            if require_assignments:
+                errors.append(f"Task '{task.id}' chưa được phân công. Hãy chọn một thành viên cho task này.")
+        elif task.assignee_id not in member_ids:
+            errors.append(
+                f"Task '{task.id}' được giao cho ID '{task.assignee_id}' không có trong danh sách thành viên. "
+                "Hãy chọn một thành viên hiện có hoặc bỏ phân công."
+            )
 
     # =========================================================================
     # CHỐT CHẶN 2: Kiểm tra Tính toàn vẹn cột Kanban & WIP Limits (Kanban Integrity)

@@ -24,7 +24,6 @@ from typing import Any
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
-from pydantic import ValidationError
 
 from models import SchedulingIR
 
@@ -204,6 +203,11 @@ def parse_kanban_prompt(user_text: str, api_key: str) -> SchedulingIR:
 
     # 3. Xây dựng GenAI-compatible schema và GenerateContentConfig
     genai_schema = _build_genai_schema(SchedulingIR)
+    # Thành viên, phân công và tiến độ là dữ liệu do người dùng xác nhận.
+    genai_schema["properties"].pop("members")
+    task_properties = genai_schema["properties"]["tasks"]["items"]["properties"]
+    task_properties.pop("assignee_id")
+    task_properties.pop("status")
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=genai_schema,
@@ -252,11 +256,12 @@ def parse_kanban_prompt(user_text: str, api_key: str) -> SchedulingIR:
     # 5. Làm sạch phản hồi & xác thực nghiêm ngặt
     raw_text = _strip_markdown_json(response.text)
 
-    try:
-        ir = SchedulingIR.model_validate_json(raw_text)
-    except ValidationError as ve:
-        # Phân biệt rõ: lỗi cấu trúc dữ liệu (để Streamlit hiển thị thân thiện)
-        raise ValidationError(ve.errors(), SchedulingIR) from ve
+    # Giữ nguyên ValidationError để giao diện nhận chi tiết lỗi cấu trúc.
+    ir = SchedulingIR.model_validate_json(raw_text)
+    ir.members = []
+    for task in ir.tasks:
+        task.assignee_id = None
+        task.status = "To Do"
 
     # 6. Hậu xử lý: bổ sung wip_limits nếu schema constraint khiến dict trả về rỗng
     if not ir.kanban_config.wip_limits and ir.kanban_config.stages:

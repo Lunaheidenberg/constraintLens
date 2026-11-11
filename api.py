@@ -227,11 +227,12 @@ def parse_prompt(payload: ParseRequest):
 
 
 @app.post("/api/validate", response_model=ValidateResponse)
-def validate_schedule(ir: SchedulingIR):
+def validate_schedule(ir: SchedulingIR, require_assignments: bool = False):
     """
     Kiểm tra toàn diện tính toàn vẹn của SchedulingIR (DAG Cycle, Kanban Stages, WIP limits).
+    require_assignments=true kiểm tra thêm task chưa có người phụ trách.
     """
-    errors = validate_ir(ir, raise_on_error=False)
+    errors = validate_ir(ir, require_assignments=require_assignments)
     return ValidateResponse(
         valid=(len(errors) == 0),
         errors=errors,

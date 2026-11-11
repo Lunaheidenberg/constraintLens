@@ -9,6 +9,13 @@
 // 1. CÁC KIỂU DỮ LIỆU ĐẦU VÀO & CẤU HÌNH KANBAN (models.py)
 // ============================================================================
 
+export type KanbanStatus = 'To Do' | 'Doing' | 'Done';
+
+export interface ProjectMember {
+  id: string;
+  name: string;
+}
+
 /**
  * Một công việc cụ thể trong dự án Kanban.
  * Tương ứng với class Task trong models.py.
@@ -22,8 +29,12 @@ export interface Task {
   duration: number;
   /** Danh sách ID các công việc phải hoàn thành trước (tiên quyết) */
   dependencies: string[];
-  /** Tên cột Kanban mà công việc này thuộc về (VD: Design, Backend, Testing) */
+  /** Nhóm WIP cũ của bộ lập lịch (VD: Design, Backend, Testing) */
   kanban_stage: string;
+  /** Nhóm chuyên môn, mặc định lấy từ kanban_stage với payload cũ */
+  category?: string;
+  status?: KanbanStatus;
+  assignee_id?: string | null;
 }
 
 /**
@@ -50,6 +61,8 @@ export interface SchedulingIR {
   kanban_config: KanbanConfig;
   /** Danh sách toàn bộ các công việc cần làm */
   tasks: Task[];
+  /** Có thể bỏ qua trong payload cũ hoặc bản nháp chưa có thành viên */
+  members?: ProjectMember[];
 }
 
 
