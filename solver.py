@@ -1,23 +1,27 @@
 """
 solver.py
 ---------
-Giải bài toán lập lịch dự án có ràng buộc tài nguyên và giới hạn WIP Kanban
-(Resource-Constrained Project Scheduling Problem – RCPSP) bằng Google OR-Tools CP-SAT.
+Giải bài toán lập lịch dự án theo người phụ trách bằng Google OR-Tools CP-SAT.
+Chế độ tương thích vẫn hỗ trợ giới hạn WIP Kanban và dung lượng nhóm.
 
 Quy tắc kiến trúc (architecture.md):
 - Validation First: Chạy validate_ir() TRƯỚC khi khởi động CP-SAT.
-- Chỉ dùng model.AddCumulative() để xử lý WIP Limit và Team Capacity.
-- Không tự ý sửa đổi models.py hay validator.py.
+- Dùng model.AddNoOverlap() cho các task đã giao cho cùng một thành viên.
+- Chỉ dùng model.AddCumulative() để xử lý WIP Limit và Team Capacity trong chế độ cũ.
 """
 
 import time
-from typing import Optional
+from collections import defaultdict
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from ortools.sat.python import cp_model
 
 from models import SchedulingIR, KanbanConfig, Task
 from validator import validate_ir
+
+
+SchedulingMode = Literal["legacy", "member"]
 
 
 # =============================================================================
@@ -33,6 +37,7 @@ class ScheduledTask(BaseModel):
     dependencies: list[str]
     start_day: int
     end_day: int
+    assignee_id: str | None = None
     earliest_ready_day: int = Field(
         description=(
             "Ngày sớm nhất khi mọi dependencies đã hoàn thành; bằng 0 nếu không có dependencies."
@@ -68,10 +73,11 @@ class StageBottleneckMetric(BaseModel):
 
 class ScheduleResult(BaseModel):
     """Kết quả đầy đủ sau khi giải bài toán lập lịch."""
+    scheduling_mode: SchedulingMode
     status: str = Field(
         description=(
             "Trạng thái giải: "
-            "'OPTIMAL', 'FEASIBLE', 'INFEASIBLE', 'INVALID_INPUT', 'MODEL_INVALID'."
+            "'OPTIMAL', 'FEASIBLE', 'INFEASIBLE', 'INVALID_INPUT', 'MODEL_INVALID', 'UNKNOWN'."
         )
     )
     makespan: int = Field(
@@ -97,28 +103,37 @@ class ScheduleResult(BaseModel):
 def solve_schedule(
     ir: SchedulingIR,
     time_limit_sec: float = 10.0,
+    *,
+    scheduling_mode: SchedulingMode | None = None,
 ) -> ScheduleResult:
     """
-    Giải bài toán lập lịch dự án RCPSP với ràng buộc WIP Kanban bằng CP-SAT.
+    Giải bài toán lập lịch dự án RCPSP bằng CP-SAT.
 
     Args:
         ir: Đối tượng SchedulingIR đã được phân tích từ dữ liệu đầu vào.
         time_limit_sec: Giới hạn thời gian giải tính bằng giây (mặc định 10 giây).
+        scheduling_mode: Chọn chế độ lập lịch. Mặc định dùng lịch theo thành viên
+                         nếu có danh sách thành viên hoặc task đã được giao.
 
     Returns:
         ScheduleResult chứa toàn bộ kết quả lịch trình và chỉ số bottleneck.
     """
     t_start = time.perf_counter()
+    if scheduling_mode is None:
+        has_member_data = bool(ir.members) or any(task.assignee_id is not None for task in ir.tasks)
+        scheduling_mode = "member" if has_member_data else "legacy"
+    use_members = scheduling_mode == "member"
 
     # =========================================================================
     # BƯỚC 1: TIỀN KIỂM TRA (Pre-Validation)
     # Gọi validate_ir() từ validator.py. Nếu có lỗi, trả về ngay mà không
     # khởi động CP-SAT – tuân thủ nguyên tắc "Validation First" trong architecture.md.
     # =========================================================================
-    errors = validate_ir(ir, raise_on_error=False)
+    errors = validate_ir(ir, require_assignments=use_members)
     if errors:
         elapsed_ms = (time.perf_counter() - t_start) * 1000.0
         return ScheduleResult(
+            scheduling_mode=scheduling_mode,
             status="INVALID_INPUT",
             makespan=0,
             solve_time_ms=round(elapsed_ms, 3),
@@ -128,13 +143,7 @@ def solve_schedule(
             errors=errors,
         )
 
-    # Lấy cấu hình Kanban (tương thích cả kanban_config và kanban)
-    kanban: KanbanConfig = getattr(ir, "kanban_config", None) or getattr(ir, "kanban", None)
-    stages: list[str] = kanban.stages
-    wip_limits: dict[str, int] = kanban.wip_limits
-
     tasks: list[Task] = ir.tasks
-    task_map: dict[str, Task] = {t.id: t for t in tasks}
 
     # =========================================================================
     # BƯỚC 2: KHỞI TẠO MODEL CP-SAT VÀ BIẾN THỜI GIAN
@@ -165,28 +174,16 @@ def solve_schedule(
         for dep_id in task.dependencies:
             model.Add(start_vars[task.id] >= end_vars[dep_id])
 
-    # =========================================================================
-    # RÀNG BUỘC 2: GIỚI HẠN TỔNG NHÂN SỰ NHÓM (Global Team Capacity)
-    # Mỗi task đang chạy tiêu thụ 1 đơn vị nhân sự.
-    # AddCumulative đảm bảo tại mọi thời điểm: số task đang chạy ≤ team_capacity.
-    # =========================================================================
-    all_intervals = [interval_vars[t.id] for t in tasks]
-    all_demands = [1] * len(tasks)
-    model.AddCumulative(all_intervals, all_demands, ir.team_capacity)
-
-    # =========================================================================
-    # RÀNG BUỘC 3: GIỚI HẠN WIP TỪNG CỘT KANBAN (Stage WIP Limits)
-    # Với mỗi cột Kanban, gom các interval của task thuộc cột đó rồi áp
-    # AddCumulative với wip_limit của cột đó.
-    # =========================================================================
-    for stage in stages:
-        stage_tasks = [t for t in tasks if t.kanban_stage == stage]
-        if not stage_tasks:
-            continue
-        stage_intervals = [interval_vars[t.id] for t in stage_tasks]
-        stage_demands = [1] * len(stage_tasks)
-        wip_limit = wip_limits.get(stage, ir.team_capacity)
-        model.AddCumulative(stage_intervals, stage_demands, wip_limit)
+    if use_members:
+        # Mỗi thành viên chỉ làm một task tại một thời điểm.
+        member_intervals: dict[str, list[cp_model.IntervalVar]] = defaultdict(list)
+        for task in tasks:
+            assert task.assignee_id is not None  # Đã kiểm tra ở bước tiền kiểm tra.
+            member_intervals[task.assignee_id].append(interval_vars[task.id])
+        for intervals in member_intervals.values():
+            model.AddNoOverlap(intervals)
+    else:
+        _add_legacy_capacity_constraints(model, ir, interval_vars)
 
     # =========================================================================
     # BƯỚC 3: HÀM MỤC TIÊU KÉP – LEXICOGRAPHICAL TWO-TIER OBJECTIVE
@@ -220,25 +217,22 @@ def solve_schedule(
     elapsed_ms = (time.perf_counter() - t_start) * 1000.0
 
     # Ánh xạ mã trạng thái OR-Tools sang chuỗi trạng thái ngữ nghĩa
-    status_map = {
-        cp_model.OPTIMAL: "OPTIMAL",
-        cp_model.FEASIBLE: "FEASIBLE",
-        cp_model.INFEASIBLE: "INFEASIBLE",
-        cp_model.MODEL_INVALID: "MODEL_INVALID",
-        cp_model.UNKNOWN: "INFEASIBLE",  # Hết thời gian mà chưa tìm được nghiệm
-    }
-    status_str = status_map.get(status_code, "INFEASIBLE")
+    status_str = solver.StatusName(status_code)
 
     # Nếu không có nghiệm khả thi → trả về kết quả rỗng
     if status_code not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        error = f"CP-SAT không tìm được nghiệm khả thi. Trạng thái: {status_str}"
+        if status_code == cp_model.UNKNOWN:
+            error = "CP-SAT chưa tìm được lịch khả thi hoặc chứng minh vô nghiệm. Hãy thử tăng thời gian giải."
         return ScheduleResult(
+            scheduling_mode=scheduling_mode,
             status=status_str,
             makespan=0,
             solve_time_ms=round(elapsed_ms, 3),
             scheduled_tasks=[],
             stage_metrics=[],
             bottleneck_stages=[],
-            errors=[f"CP-SAT không tìm được nghiệm khả thi. Trạng thái: {status_str}"],
+            errors=[error],
         )
 
     # =========================================================================
@@ -273,33 +267,72 @@ def solve_schedule(
                 dependencies=list(task.dependencies),
                 start_day=start_day,
                 end_day=end_day,
+                assignee_id=task.assignee_id if use_members else None,
                 earliest_ready_day=earliest_ready_day,
                 queue_wait_days=queue_wait_days,
             )
         )
 
-    # Tạo dict tra cứu nhanh ScheduledTask theo id
-    sched_map: dict[str, ScheduledTask] = {st.id: st for st in scheduled_tasks}
+    stage_metrics = [] if use_members else _legacy_stage_metrics(ir, scheduled_tasks, makespan_val)
+    return ScheduleResult(
+        scheduling_mode=scheduling_mode,
+        status=status_str,
+        makespan=makespan_val,
+        solve_time_ms=round(elapsed_ms, 3),
+        scheduled_tasks=scheduled_tasks,
+        stage_metrics=stage_metrics,
+        bottleneck_stages=[metric.stage_name for metric in stage_metrics if metric.is_bottleneck],
+        errors=[],
+    )
 
+
+def _add_legacy_capacity_constraints(
+    model: cp_model.CpModel, ir: SchedulingIR, interval_vars: dict[str, cp_model.IntervalVar]
+) -> None:
+    # =========================================================================
+    # RÀNG BUỘC 2: GIỚI HẠN TỔNG NHÂN SỰ NHÓM (Global Team Capacity)
+    # Mỗi task đang chạy tiêu thụ 1 đơn vị nhân sự.
+    # AddCumulative đảm bảo tại mọi thời điểm: số task đang chạy ≤ team_capacity.
+    # =========================================================================
+    all_intervals = list(interval_vars.values())
+    all_demands = [1] * len(all_intervals)
+    model.AddCumulative(all_intervals, all_demands, ir.team_capacity)
+
+    # =========================================================================
+    # RÀNG BUỘC 3: GIỚI HẠN WIP TỪNG CỘT KANBAN (Stage WIP Limits)
+    # Với mỗi cột Kanban, gom các interval của task thuộc cột đó rồi áp
+    # AddCumulative với wip_limit của cột đó.
+    # =========================================================================
+    for stage in ir.kanban_config.stages:
+        stage_intervals = [interval_vars[t.id] for t in ir.tasks if t.kanban_stage == stage]
+        if not stage_intervals:
+            continue
+        stage_demands = [1] * len(stage_intervals)
+        wip_limit = ir.kanban_config.wip_limits.get(stage, ir.team_capacity)
+        model.AddCumulative(stage_intervals, stage_demands, wip_limit)
+
+
+def _legacy_stage_metrics(
+    ir: SchedulingIR, scheduled_tasks: list[ScheduledTask], makespan: int
+) -> list[StageBottleneckMetric]:
     # =========================================================================
     # BƯỚC 6: THỐNG KÊ BOTTLENECK TỪNG CỘT KANBAN
     # Quét từng ngày d trong [0, makespan) để đếm số task đang chạy đồng thời
     # tại mỗi cột → peak_concurrent_tasks thực tế.
     # =========================================================================
     stage_metrics: list[StageBottleneckMetric] = []
-    bottleneck_stages: list[str] = []
 
-    for stage in stages:
-        stage_tasks_sched = [sched_map[t.id] for t in tasks if t.kanban_stage == stage]
+    for stage in ir.kanban_config.stages:
+        stage_tasks_sched = [task for task in scheduled_tasks if task.kanban_stage == stage]
 
         total_task_days = sum(st.duration for st in stage_tasks_sched)
         total_queue_wait_days = sum(st.queue_wait_days for st in stage_tasks_sched)
-        wip_limit = wip_limits.get(stage, ir.team_capacity)
+        wip_limit = ir.kanban_config.wip_limits.get(stage, ir.team_capacity)
 
         # Đếm peak_concurrent_tasks bằng cách quét từng ngày
         peak_concurrent = 0
-        if makespan_val > 0 and stage_tasks_sched:
-            for d in range(makespan_val):
+        if makespan > 0 and stage_tasks_sched:
+            for d in range(makespan):
                 # Task đang chạy vào ngày d: start_day <= d < end_day
                 concurrent = sum(
                     1
@@ -322,18 +355,7 @@ def solve_schedule(
         )
         stage_metrics.append(metric)
 
-        if is_bottleneck:
-            bottleneck_stages.append(stage)
-
-    return ScheduleResult(
-        status=status_str,
-        makespan=makespan_val,
-        solve_time_ms=round(elapsed_ms, 3),
-        scheduled_tasks=scheduled_tasks,
-        stage_metrics=stage_metrics,
-        bottleneck_stages=bottleneck_stages,
-        errors=[],
-    )
+    return stage_metrics
 
 
 # =============================================================================

@@ -48,8 +48,8 @@ def validate_ir(
     Kiểm tra toàn diện tính hợp lệ của đối tượng SchedulingIR trước khi giải bài toán.
 
     Thu thập TOÀN BỘ lỗi logic mà không dừng sớm, bao gồm:
-    1. Kiểm tra danh sách rỗng (tasks, kanban stages) & trùng lặp Task ID.
-    2. Kiểm tra tính toàn vẹn cột Kanban & WIP Limits (phạm vi giá trị, tên cột hợp lệ).
+    1. Kiểm tra danh sách tasks rỗng & trùng lặp Task ID.
+    2. Trong chế độ cũ, kiểm tra tính toàn vẹn cột Kanban & WIP Limits.
     3. Kiểm tra tính toàn vẹn tham chiếu phụ thuộc (không tự phụ thuộc, không phụ thuộc ID ma).
     4. Phát hiện chu trình phụ thuộc vòng tròn bằng thuật toán DFS 3 màu (DAG Cycle Detection).
     5. Kiểm tra ID thành viên duy nhất và tham chiếu người được phân công.
@@ -58,21 +58,13 @@ def validate_ir(
         ir: Đối tượng SchedulingIR cần kiểm tra.
         raise_on_error: Nếu True và có lỗi, ném ra ngoại lệ SchedulingValidationError(errors).
                         Mặc định là False (chỉ trả về danh sách lỗi).
-        require_assignments: Yêu cầu mỗi task có người phụ trách khi kiểm tra
-                             dữ liệu để chuẩn bị cho lịch theo thành viên.
+        require_assignments: Kiểm tra lịch theo thành viên. Mỗi task phải có người
+                             phụ trách và không áp dụng các quy tắc WIP cũ.
 
     Returns:
         list[str]: Danh sách các chuỗi thông báo lỗi bằng tiếng Việt (rỗng [] nếu hợp lệ).
     """
     errors: list[str] = []
-
-    # Truy xuất an toàn cấu hình Kanban (tương thích kanban_config hoặc kanban)
-    kanban: Optional[KanbanConfig] = getattr(ir, "kanban_config", None)
-    if kanban is None:
-        kanban = getattr(ir, "kanban", None)
-
-    stages: list[str] = getattr(kanban, "stages", []) if kanban else []
-    wip_limits: dict[str, int] = getattr(kanban, "wip_limits", {}) if kanban else {}
 
     # =========================================================================
     # CHỐT CHẶN 1: Kiểm tra Danh sách rỗng & Trùng lặp ID (ID Uniqueness)
@@ -81,9 +73,6 @@ def validate_ir(
 
     if not tasks:
         errors.append("Danh sách công việc (ir.tasks) không được để rỗng.")
-
-    if not stages:
-        errors.append("Danh sách các cột Kanban (ir.kanban.stages) không được để rỗng.")
 
     # Kiểm tra trùng lặp Task ID
     seen_task_ids: set[str] = set()
@@ -112,35 +101,14 @@ def validate_ir(
         elif task.assignee_id not in member_ids:
             errors.append(
                 f"Task '{task.id}' được giao cho ID '{task.assignee_id}' không có trong danh sách thành viên. "
-                "Hãy chọn một thành viên hiện có hoặc bỏ phân công."
+                "Hãy chọn một thành viên hiện có hoặc thêm người phụ trách vào danh sách thành viên."
             )
 
     # =========================================================================
     # CHỐT CHẶN 2: Kiểm tra Tính toàn vẹn cột Kanban & WIP Limits (Kanban Integrity)
     # =========================================================================
-    stages_set = set(stages)
-
-    # 2.1 Mọi task.kanban_stage phải nằm trong ir.kanban.stages
-    for task in tasks:
-        if task.kanban_stage not in stages_set:
-            errors.append(
-                f"Task '{task.id}' gắn với cột '{task.kanban_stage}' không tồn tại trong cấu hình Kanban {stages}"
-            )
-
-    # 2.2 Mọi key trong ir.kanban.wip_limits phải nằm trong ir.kanban.stages
-    for stage_name in wip_limits.keys():
-        if stage_name not in stages_set:
-            errors.append(
-                f"Cột '{stage_name}' trong cấu hình giới hạn WIP (wip_limits) không tồn tại trong cấu hình Kanban {stages}."
-            )
-
-    # 2.3 Mọi giá trị giới hạn trong wip_limits phải thỏa mãn: 1 <= wip_limit <= ir.team_capacity
-    for stage_name, limit_val in wip_limits.items():
-        if not (1 <= limit_val <= ir.team_capacity):
-            errors.append(
-                f"Cột '{stage_name}' có giới hạn WIP={limit_val} không hợp lệ. "
-                f"Giới hạn phải thỏa mãn: 1 <= wip_limit <= dung lượng nhóm ({ir.team_capacity})."
-            )
+    if not require_assignments:
+        errors.extend(_validate_legacy_kanban(ir, tasks))
 
     # =========================================================================
     # CHỐT CHẶN 3: Kiểm tra Tham chiếu Phụ thuộc (Referential Integrity)
@@ -214,6 +182,44 @@ def validate_ir(
     # =========================================================================
     if raise_on_error and errors:
         raise SchedulingValidationError(errors)
+
+    return errors
+
+
+def _validate_legacy_kanban(ir: SchedulingIR, tasks: list[Task]) -> list[str]:
+    errors: list[str] = []
+    # Truy xuất an toàn cấu hình Kanban (tương thích kanban_config hoặc kanban)
+    kanban: Optional[KanbanConfig] = getattr(ir, "kanban_config", None)
+    if kanban is None:
+        kanban = getattr(ir, "kanban", None)
+
+    stages: list[str] = getattr(kanban, "stages", []) if kanban else []
+    wip_limits: dict[str, int] = getattr(kanban, "wip_limits", {}) if kanban else {}
+    if not stages:
+        errors.append("Danh sách các cột Kanban (ir.kanban.stages) không được để rỗng.")
+    stages_set = set(stages)
+
+    # 2.1 Mọi task.kanban_stage phải nằm trong ir.kanban.stages
+    for task in tasks:
+        if task.kanban_stage not in stages_set:
+            errors.append(
+                f"Task '{task.id}' gắn với cột '{task.kanban_stage}' không tồn tại trong cấu hình Kanban {stages}"
+            )
+
+    # 2.2 Mọi key trong ir.kanban.wip_limits phải nằm trong ir.kanban.stages
+    for stage_name in wip_limits:
+        if stage_name not in stages_set:
+            errors.append(
+                f"Cột '{stage_name}' trong cấu hình giới hạn WIP (wip_limits) không tồn tại trong cấu hình Kanban {stages}."
+            )
+
+    # 2.3 Mọi giá trị giới hạn trong wip_limits phải thỏa mãn: 1 <= wip_limit <= ir.team_capacity
+    for stage_name, limit_val in wip_limits.items():
+        if not (1 <= limit_val <= ir.team_capacity):
+            errors.append(
+                f"Cột '{stage_name}' có giới hạn WIP={limit_val} không hợp lệ. "
+                f"Giới hạn phải thỏa mãn: 1 <= wip_limit <= dung lượng nhóm ({ir.team_capacity})."
+            )
 
     return errors
 

@@ -82,6 +82,7 @@ export interface ScheduledTask {
   dependencies: string[];
   start_day: number;
   end_day: number;
+  assignee_id: string | null;
   /** Ngày sớm nhất khi mọi dependencies đã hoàn thành (0 nếu không có) */
   earliest_ready_day: number;
   /** start_day - earliest_ready_day: số ngày thẻ phải chờ do nghẽn WIP hoặc thiếu người */
@@ -110,13 +111,17 @@ export type SolverStatus =
   | 'FEASIBLE'
   | 'INFEASIBLE'
   | 'INVALID_INPUT'
-  | 'MODEL_INVALID';
+  | 'MODEL_INVALID'
+  | 'UNKNOWN';
+
+export type SchedulingMode = 'legacy' | 'member';
 
 /**
  * Kết quả lập lịch đầy đủ từ Google OR-Tools CP-SAT.
  * Tương ứng với class ScheduleResult trong solver.py.
  */
 export interface ScheduleResult {
+  scheduling_mode: SchedulingMode;
   status: SolverStatus | string;
   makespan: number;
   solve_time_ms: number;
@@ -144,16 +149,11 @@ export interface SolveResponse {
  * Payload yêu cầu giải bài toán lập lịch POST /api/solve.
  * Hỗ trợ cả 2 dạng: bọc trong { ir, ... } hoặc gửi trực tiếp SchedulingIR ở root.
  */
-export type SolveRequest =
-  | {
-      ir: SchedulingIR;
-      target_deadline?: number | null;
-      time_limit_sec?: number;
-    }
-  | (SchedulingIR & {
-      target_deadline?: number | null;
-      time_limit_sec?: number;
-    });
+export type SolveRequest = ({ ir: SchedulingIR } | SchedulingIR) & {
+  scheduling_mode?: SchedulingMode | null;
+  target_deadline?: number | null;
+  time_limit_sec?: number;
+};
 
 /**
  * Payload yêu cầu phân tích ngôn ngữ tự nhiên POST /api/parse.

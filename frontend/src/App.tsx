@@ -1112,6 +1112,10 @@ export default function App() {
         }
 
         const data: SolveResponse = await res.json();
+        setSolveResponse(data);
+        if (data.result.status !== "OPTIMAL" && data.result.status !== "FEASIBLE") {
+          throw new Error(data.result.errors.join(" ") || data.result.status);
+        }
 
         if (withIllusion) {
           // Bước 5: Cập nhật "Đã tìm ra lộ trình tối ưu!"
@@ -1122,7 +1126,6 @@ export default function App() {
         }
 
         // Cập nhật kết quả cuối cùng (thời gian giải solve_time_ms của CP-SAT vẫn nguyên vẹn)
-        setSolveResponse(data);
         setSolveBanner(
           `Đã tối ưu hóa lịch trình thành công trong ${data.result.solve_time_ms.toFixed(1)}ms (Makespan: ${data.result.makespan} ngày, ${data.result.scheduled_tasks.length} tasks).`
         );

@@ -139,11 +139,12 @@ class ApiCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(invalid.status_code, 422)
             self.assertEqual(invalid.json()["detail"][0]["loc"], ["body", "tasks", 0, "status"])
 
-    async def test_legacy_solve_and_assignments_keep_current_makespan(self):
+    async def test_legacy_and_member_solve_use_expected_capacity(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             legacy = legacy_payload()
             direct = await client.post("/api/solve", json=legacy)
             result = direct.raise_for_status().json()["result"]
+            self.assertEqual(result["scheduling_mode"], "legacy")
             self.assertEqual((result["status"], result["makespan"]), ("OPTIMAL", 2))
 
             legacy["members"] = [{"id": "M1", "name": "Alex"}]
@@ -153,4 +154,10 @@ class ApiCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(ready.raise_for_status().json()["valid"])
             wrapped = await client.post("/api/solve", json={"ir": legacy})
             result = wrapped.raise_for_status().json()["result"]
+            self.assertEqual(result["scheduling_mode"], "member")
+            self.assertEqual((result["status"], result["makespan"]), ("OPTIMAL", 3))
+
+            compatibility = await client.post("/api/solve", json={"ir": legacy, "scheduling_mode": "legacy"})
+            result = compatibility.raise_for_status().json()["result"]
+            self.assertEqual(result["scheduling_mode"], "legacy")
             self.assertEqual((result["status"], result["makespan"]), ("OPTIMAL", 2))

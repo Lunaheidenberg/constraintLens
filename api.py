@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from models import KanbanConfig, SchedulingIR, Task
 from parser import parse_kanban_prompt
-from solver import ScheduleResult, solve_schedule
+from solver import ScheduleResult, SchedulingMode, solve_schedule
 from validator import validate_ir
 
 
@@ -155,6 +155,10 @@ class ValidateResponse(BaseModel):
 
 class SolveRequest(BaseModel):
     ir: SchedulingIR = Field(description="Cấu hình SchedulingIR của dự án.")
+    scheduling_mode: SchedulingMode | None = Field(
+        default=None,
+        description="Chế độ lập lịch. Nếu bỏ qua, dùng lịch theo thành viên khi có thành viên hoặc phân công.",
+    )
     target_deadline: Optional[int] = Field(default=None, description="Mục tiêu deadline (số ngày).")
     time_limit_sec: Optional[float] = Field(default=10.0, description="Giới hạn thời gian giải toán CP-SAT.")
 
@@ -165,13 +169,15 @@ class SolveRequest(BaseModel):
             # Form 1: Đã bọc trong key 'ir'
             if "ir" in data:
                 return data
-            # Form 2: Gửi trực tiếp cấu trúc SchedulingIR ở root (kèm target_deadline/time_limit_sec nếu có)
+            # Form 2: Gửi trực tiếp cấu trúc SchedulingIR ở root (kèm các tùy chọn giải nếu có)
             if "tasks" in data:
                 data_copy = dict(data)
+                scheduling_mode = data_copy.pop("scheduling_mode", None)
                 target_deadline = data_copy.pop("target_deadline", None)
                 time_limit_sec = data_copy.pop("time_limit_sec", 10.0)
                 return {
                     "ir": data_copy,
+                    "scheduling_mode": scheduling_mode,
                     "target_deadline": target_deadline,
                     "time_limit_sec": time_limit_sec,
                 }
@@ -230,7 +236,8 @@ def parse_prompt(payload: ParseRequest):
 def validate_schedule(ir: SchedulingIR, require_assignments: bool = False):
     """
     Kiểm tra toàn diện tính toàn vẹn của SchedulingIR (DAG Cycle, Kanban Stages, WIP limits).
-    require_assignments=true kiểm tra thêm task chưa có người phụ trách.
+    require_assignments=true kiểm tra lịch theo thành viên, yêu cầu mỗi task có người phụ trách
+    và bỏ qua các quy tắc WIP cũ.
     """
     errors = validate_ir(ir, require_assignments=require_assignments)
     return ValidateResponse(
@@ -246,7 +253,7 @@ def solve_project_schedule(payload: SolveRequest):
     What-If Counterfactual (Cố vấn giải cứu Deadline) nếu makespan > target_deadline.
     """
     time_limit = payload.time_limit_sec if payload.time_limit_sec and payload.time_limit_sec > 0 else 10.0
-    result = solve_schedule(payload.ir, time_limit_sec=time_limit)
+    result = solve_schedule(payload.ir, time_limit_sec=time_limit, scheduling_mode=payload.scheduling_mode)
 
     rescue_suggestions: list[str] = []
 
@@ -263,7 +270,7 @@ def solve_project_schedule(payload: SolveRequest):
             rescue_suggestions.append(
                 f"✅ Dự án hoàn thành trong {result.makespan} ngày, đã đạt mục tiêu deadline ({target} ngày)."
             )
-        else:
+        elif result.scheduling_mode == "legacy":
             base_makespan = result.makespan
             stages = payload.ir.kanban_config.stages
             wip_limits = payload.ir.kanban_config.wip_limits
@@ -287,7 +294,7 @@ def solve_project_schedule(payload: SolveRequest):
                         },
                         deep=True,
                     )
-                    sim_res = solve_schedule(sim_ir, time_limit_sec=3.0)
+                    sim_res = solve_schedule(sim_ir, time_limit_sec=3.0, scheduling_mode="legacy")
                     if sim_res.status in ("OPTIMAL", "FEASIBLE") and sim_res.makespan < base_makespan:
                         saved = base_makespan - sim_res.makespan
                         tag = " 🎯 [ĐẠT DEADLINE!]" if sim_res.makespan <= target else ""
@@ -305,7 +312,7 @@ def solve_project_schedule(payload: SolveRequest):
                 update={"team_capacity": new_capacity},
                 deep=True,
             )
-            sim_res_cap = solve_schedule(sim_ir_cap, time_limit_sec=3.0)
+            sim_res_cap = solve_schedule(sim_ir_cap, time_limit_sec=3.0, scheduling_mode="legacy")
             if sim_res_cap.status in ("OPTIMAL", "FEASIBLE") and sim_res_cap.makespan < base_makespan:
                 saved = base_makespan - sim_res_cap.makespan
                 tag = " 🎯 [ĐẠT DEADLINE!]" if sim_res_cap.makespan <= target else ""
@@ -335,7 +342,7 @@ def solve_project_schedule(payload: SolveRequest):
                         },
                         deep=True,
                     )
-                    sim_res_both = solve_schedule(sim_ir_both, time_limit_sec=3.0)
+                    sim_res_both = solve_schedule(sim_ir_both, time_limit_sec=3.0, scheduling_mode="legacy")
                     if sim_res_both.status in ("OPTIMAL", "FEASIBLE") and sim_res_both.makespan < base_makespan:
                         saved = base_makespan - sim_res_both.makespan
                         tag = " 🎯 [ĐẠT DEADLINE!]" if sim_res_both.makespan <= target else ""
