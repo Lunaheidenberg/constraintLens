@@ -15,12 +15,29 @@ export interface Plan {
 export interface PlanState {
   revision: number;
   baseline: Plan | null;
+  previous: Plan | null;
   accepted: Plan | null;
+  acceptedRevision: number | null;
   proposal: { revision: number; plan: Plan } | null;
   stale: boolean;
 }
 
-export const initialPlans: PlanState = { revision: 0, baseline: null, accepted: null, proposal: null, stale: false };
+export const initialPlans: PlanState = {
+  revision: 0, baseline: null, previous: null, accepted: null, acceptedRevision: null, proposal: null, stale: false,
+};
+
+export const hasSolution = (status: string) => status === "OPTIMAL" || status === "FEASIBLE";
+
+export type ComparisonReference = "previous" | "baseline";
+
+export function comparisonPair(state: PlanState, reference: ComparisonReference = "previous") {
+  if (!state.accepted) return null;
+  if (state.proposal?.revision === state.revision) {
+    return { previous: state.accepted, revised: state.proposal.plan, mode: "proposal" as const };
+  }
+  const previous = reference === "baseline" ? state.baseline : state.previous;
+  return previous && previous !== state.accepted ? { previous, revised: state.accepted, mode: reference } : null;
+}
 
 type PlanAction =
   | { type: "reset" | "inputsChanged" | "cancel" | "accept" }
@@ -34,13 +51,17 @@ export function planReducer(state: PlanState, action: PlanAction): PlanState {
       return { ...state, revision: state.revision + 1, proposal: null, stale: state.stale || state.proposal !== null };
     case "propose":
       if (action.revision !== state.revision) return state;
+      if (!hasSolution(action.plan.status)) return { ...state, proposal: null };
       return { ...state, proposal: { revision: action.revision, plan: action.plan }, stale: false };
     case "cancel":
       return { ...state, proposal: null, stale: false };
     case "accept": {
       if (!state.proposal || state.proposal.revision !== state.revision) return state;
       const plan = state.proposal.plan;
-      return { ...state, baseline: state.baseline ?? plan, accepted: plan, proposal: null, stale: false };
+      return {
+        ...state, baseline: state.baseline ?? plan, previous: state.accepted, accepted: plan,
+        acceptedRevision: state.revision, proposal: null, stale: false,
+      };
     }
   }
 }

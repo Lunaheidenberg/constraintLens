@@ -27,12 +27,15 @@ T4 keeps the date contract separate from `SchedulingIR` for compatibility. `cale
 
 The initial and revised plans share the integer CP-SAT interval builder. Revised intervals use remaining durations and obey finish-to-start dependencies and one-task-at-a-time member capacity. The solver minimizes the absolute project finish, with earlier starts as a secondary objective. The remaining horizon measures from the replanning boundary to the finish; when all tasks are Done it is zero and the project finish comes from the latest confirmed completion. A failed or unknown solve yields no proposal.
 
-The React/FastAPI workflow keeps the editable project in memory and uses no database. The repository retains the legacy Streamlit entry point in `app.py`.
+T5 previews the accepted plan against a valid rescheduling proposal. Acceptance retains the outgoing accepted snapshot as the previous plan and leaves the original baseline intact. The comparison then shows the previous plan against the current accepted plan, with an option to use the baseline when it is a different reference. Canceling or invalidating a proposal clears its comparison. After edits, comparisons between accepted snapshots are labeled as using accepted data.
+
+`comparison.ts` compares snapshot tasks by ID and computes calendar-day differences from the stored exclusive finish boundaries. The UI shows the last occupied day for planned work and the last confirmed completion for an all-Done plan. Both finishes use the revised snapshot's inclusive target so the change in lateness uses the same deadline. Remaining horizon is shown separately. Moved and unchanged counts require two comparable planned intervals. Confirmed completion uses the recovery records, and a duration change can accompany a move. The comparison Gantt aligns both sets of intervals on one calendar axis and shows actual completions as points.
+
+The React/FastAPI workflow keeps the editable project and the comparison snapshots in memory. The repository retains the legacy Streamlit entry point in `app.py`.
 
 Local checks include `uv run --locked python -m unittest discover -s tests`, the executable scenarios in `validator.py` and `solver.py`, and the frontend TypeScript check, build, and `npm test` (Node 24). The direct parser demo and `diagnose_api.py` use the live Gemini API and are outside this baseline.
 
 ## Planned features
 
 - Migration of remaining legacy callers and contracts, followed by removal of legacy category or stage WIP constraints and their compatibility fields.
-- Comparison between baseline and updated schedules.
 - The MVP will continue without a database.

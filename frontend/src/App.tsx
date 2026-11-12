@@ -1,7 +1,8 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { CalendarDays, CircleHelp, LayoutGrid, ListTodo, LoaderCircle, Play } from "lucide-react";
 import { isCalendarDate } from "./calendar";
-import { initialPlans, planReducer } from "./plans";
+import { PlanComparison } from "./PlanComparison";
+import { hasSolution, initialPlans, planReducer } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
@@ -37,8 +38,6 @@ function calendarErrors(calendar: ProjectCalendar) {
   if (deadline && deadline < start) return ["Hạn chót mục tiêu không được trước ngày bắt đầu dự án."];
   return [];
 }
-
-const hasSolution = (status: string) => status === "OPTIMAL" || status === "FEASIBLE";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response;
@@ -304,6 +303,7 @@ export default function App() {
     const { signal } = controller;
     setPhase(solve ? "rescheduling" : "checkingProgress");
     setProgressFeedback(null);
+    if (solve && proposal) dispatchPlan({ type: "cancel" });
     const payload: RescheduleRequest = { ir, calendar, progress: { progress_as_of_date: asOf, task_progress: Object.fromEntries(taskProgress) } };
     try {
       if (!solve) {
@@ -314,7 +314,10 @@ export default function App() {
       const revised = await post<RescheduleResult>("/api/reschedule", payload, signal);
       if (signal.aborted) return;
       if (!hasSolution(revised.status)) {
-        report(revised.status === "INVALID_INPUT" ? "Sửa thông tin tiến độ" : `Chưa có lịch đề xuất (${revised.status})`, revised.errors);
+        const message = revised.status === "INVALID_INPUT" ? "Sửa thông tin tiến độ"
+          : revised.status === "INFEASIBLE" ? "Không có lịch khả thi với các ràng buộc hiện tại (INFEASIBLE)"
+          : `Chưa tìm được lịch đề xuất (${revised.status})`;
+        report(message, [...revised.errors, "Lịch đang áp dụng vẫn được giữ."]);
         return;
       }
       const { status, scheduled_tasks, solve_time_ms, errors: _errors, ...rest } = revised;
@@ -530,8 +533,9 @@ export default function App() {
               </div>
             )}
             {(accepted || proposal) && (
-              <a href={proposal ? "#schedule-proposal" : "#schedule-heading"} className="inline-flex items-center gap-1.5 rounded text-xs font-medium text-indigo-300 hover:underline">
-                <CalendarDays size={14} aria-hidden="true" /> Xem biểu đồ Gantt
+              <a href={proposal ? "#schedule-proposal" : plans.previous ? "#schedule-comparison" : "#schedule-heading"}
+                className="inline-flex items-center gap-1.5 rounded text-xs font-medium text-indigo-300 hover:underline">
+                <CalendarDays size={14} aria-hidden="true" /> {accepted && (proposal || plans.previous) ? "Xem so sánh lịch" : "Xem biểu đồ Gantt"}
               </a>
             )}
           </section>
@@ -584,9 +588,11 @@ export default function App() {
                       }}>Chấp nhận lịch</button>
                     </div>
                   </div>
-                  <Schedule plan={proposal.plan} members={members} deadline={proposal.plan.calendar.target_deadline_date} />
+                  {accepted ? <PlanComparison plans={plans} />
+                    : <Schedule plan={proposal.plan} members={members} deadline={proposal.plan.calendar.target_deadline_date} />}
                 </section>
               )}
+              {accepted && !proposal && <PlanComparison plans={plans} />}
               {accepted ? (
                 <section className="space-y-3" aria-labelledby="accepted-heading">
                   <h3 id="accepted-heading" className="text-sm font-semibold text-emerald-300">Lịch đang áp dụng</h3>
