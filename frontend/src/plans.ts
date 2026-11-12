@@ -18,12 +18,13 @@ export interface PlanState {
   previous: Plan | null;
   accepted: Plan | null;
   acceptedRevision: number | null;
+  todoConfirmed: boolean;
   proposal: { revision: number; plan: Plan } | null;
   stale: boolean;
 }
 
 export const initialPlans: PlanState = {
-  revision: 0, baseline: null, previous: null, accepted: null, acceptedRevision: null, proposal: null, stale: false,
+  revision: 0, baseline: null, previous: null, accepted: null, acceptedRevision: null, todoConfirmed: false, proposal: null, stale: false,
 };
 
 export const hasSolution = (status: string) => status === "OPTIMAL" || status === "FEASIBLE";
@@ -40,7 +41,7 @@ export function comparisonPair(state: PlanState, reference: ComparisonReference 
 }
 
 type PlanAction =
-  | { type: "reset" | "inputsChanged" | "cancel" | "accept" }
+  | { type: "reset" | "inputsChanged" | "confirmTodo" | "cancel" | "accept" }
   | { type: "propose"; revision: number; plan: Plan };
 
 export function planReducer(state: PlanState, action: PlanAction): PlanState {
@@ -48,7 +49,9 @@ export function planReducer(state: PlanState, action: PlanAction): PlanState {
     case "reset":
       return { ...initialPlans, revision: state.revision + 1 };
     case "inputsChanged":
-      return { ...state, revision: state.revision + 1, proposal: null, stale: state.stale || state.proposal !== null };
+      return { ...state, revision: state.revision + 1, todoConfirmed: false, proposal: null, stale: state.stale || state.proposal !== null };
+    case "confirmTodo":
+      return state.accepted ? { ...state, todoConfirmed: true } : state;
     case "propose":
       if (action.revision !== state.revision) return state;
       if (!hasSolution(action.plan.status)) return { ...state, proposal: null };
@@ -60,7 +63,7 @@ export function planReducer(state: PlanState, action: PlanAction): PlanState {
       const plan = state.proposal.plan;
       return {
         ...state, baseline: state.baseline ?? plan, previous: state.accepted, accepted: plan,
-        acceptedRevision: state.revision, proposal: null, stale: false,
+        acceptedRevision: state.revision, todoConfirmed: false, proposal: null, stale: false,
       };
     }
   }

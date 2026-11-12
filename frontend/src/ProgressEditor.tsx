@@ -1,5 +1,7 @@
 import { ArrowRight, ClipboardList, LoaderCircle } from "lucide-react";
-import { dateAtOffset, formatDate, isCalendarDate } from "./calendar";
+import { dateAtOffset, formatDate } from "./calendar";
+import { DateField } from "./DateField";
+import type { todoTasksDueForReview } from "./progressReview";
 import type { CompletedTask, ProjectCalendar, Task } from "./types";
 
 interface ProgressEditorProps {
@@ -7,15 +9,20 @@ interface ProgressEditorProps {
   calendar: ProjectCalendar;
   tasks: Task[];
   asOf: string;
+  asOfInput: string;
   minimumAsOf: string;
   entries: ReadonlyMap<string, string>;
   completed: ReadonlyMap<string, CompletedTask>;
   canRequest: boolean;
   projectNeedsCorrections: boolean;
-  phase: "checkingProgress" | "rescheduling" | null;
+  phase: "checkingProgress" | "rescheduling" | "preparingRecovery" | null;
   pendingMessage: string;
   feedback: { message: string; errors: string[] } | null;
   hasProposal: boolean;
+  todoReview: ReturnType<typeof todoTasksDueForReview>;
+  todoConfirmed: boolean;
+  onConfirmTodo: (confirmed: boolean) => void;
+  onOpenKanban: () => void;
   onOpenPlanning: () => void;
   onDateChange: (date: string) => void;
   onEntryChange: (id: string, value: string) => void;
@@ -23,10 +30,10 @@ interface ProgressEditorProps {
 }
 
 export function ProgressEditor(props: ProgressEditorProps) {
-  const { calendar, tasks, asOf, minimumAsOf, completed, entries, phase, feedback } = props;
-  const nextDate = isCalendarDate(asOf) && asOf < "9999-12-31" ? dateAtOffset(asOf, 1) : null;
-  const dateError = asOf && (!nextDate ? "Chọn ngày báo cáo có ngày kế tiếp hợp lệ." : asOf < minimumAsOf
-    ? `Ngày báo cáo phải từ ${formatDate(minimumAsOf)} trở đi.` : "");
+  const { calendar, tasks, asOf, asOfInput, minimumAsOf, completed, entries, phase, feedback, todoReview, todoConfirmed } = props;
+  const nextDate = asOf && asOf >= minimumAsOf && asOf < "9999-12-31" ? dateAtOffset(asOf, 1) : null;
+  const replanning = phase === "rescheduling" || phase === "preparingRecovery";
+  const needsReview = todoReview.length > 0 && !todoConfirmed;
   return (
     <section className="panel section-pad space-y-3" aria-labelledby="progress-heading">
       <h3 id="progress-heading" tabIndex={-1} className="section-title">
@@ -39,16 +46,12 @@ export function ProgressEditor(props: ProgressEditorProps) {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="notice flex flex-wrap items-center gap-x-6 gap-y-3">
-            <label className="field">Tiến độ xác nhận đến hết ngày
-              <input type="date" className="control" min={minimumAsOf || undefined} max="9999-12-30"
-                value={asOf} aria-invalid={!!dateError || undefined} aria-describedby="reporting-boundary" onChange={(event) => props.onDateChange(event.target.value)} />
-            </label>
-            <div id="reporting-boundary">
-              <p className="eyebrow">Bắt đầu lịch mới</p>
-              <p className={dateError ? "text-amber-200" : "text-zinc-100"}>
-                {dateError || (nextDate ? formatDate(nextDate) : "Ngày kế tiếp ngày báo cáo")}
-              </p>
+          <div className="progress-dates">
+            <DateField label="Tiến độ xác nhận đến hết ngày" value={asOfInput} min={minimumAsOf || undefined} max="9999-12-30"
+              onChange={props.onDateChange} describedBy="reporting-boundary" />
+            <div id="reporting-boundary" className="progress-boundary">
+              <p className="helper">Bắt đầu lịch mới</p>
+              <p className="font-medium tabular-nums">{nextDate ? formatDate(nextDate) : "Ngày kế tiếp ngày báo cáo"}</p>
             </div>
           </div>
           <p className="helper">Trạng thái lấy từ Kanban. Nhập số ngày còn lại cho Doing và xác nhận ngày hoàn thành thực tế cho Done.</p>
@@ -72,10 +75,9 @@ export function ProgressEditor(props: ProgressEditorProps) {
                           : status === "Doing" ? <input type="number" min={1} step={1} className="control w-28"
                             placeholder="Số ngày" aria-label={`Số ngày còn lại của ${task.id}`} value={entries.get(task.id) ?? ""}
                             onChange={(event) => props.onEntryChange(task.id, event.target.value)} />
-                          : status === "Done" ? <input type="date" className="control"
-                            min={calendar.project_start_date || undefined} max={asOf || undefined}
-                            aria-label={`Ngày hoàn thành thực tế của ${task.id}`} value={entries.get(task.id) ?? ""}
-                            onChange={(event) => props.onEntryChange(task.id, event.target.value)} />
+                          : status === "Done" ? <DateField hideLabel label={`Ngày hoàn thành thực tế của ${task.id}`}
+                            min={calendar.project_start_date || undefined} max={asOf || undefined} value={entries.get(task.id) ?? ""}
+                            onChange={(value) => props.onEntryChange(task.id, value)} />
                           : <span className="text-zinc-400">{task.duration} ngày theo ước tính</span>}
                       </td>
                     </tr>
@@ -84,16 +86,41 @@ export function ProgressEditor(props: ProgressEditorProps) {
               </tbody>
             </table>
           </div>
+          {todoReview.length > 0 && (
+            <section className="notice warning progress-review" aria-labelledby="progress-review-heading">
+              <h4 id="progress-review-heading" className="font-semibold">Xác nhận công việc chưa bắt đầu</h4>
+              <p role="status">{todoReview.length} công việc đã đến ngày bắt đầu dự kiến và vẫn ở trạng thái To Do. Hãy kiểm tra tiến độ thực tế.</p>
+              <ul className="review-list">
+                {todoReview.map(({ id, name, plannedStart }) => (
+                  <li key={id}>
+                    <span className="min-w-0 break-words font-medium">{name}</span>
+                    <span className="flex shrink-0 items-center gap-2 tabular-nums">
+                      <time dateTime={plannedStart}>{formatDate(plannedStart)}</time>
+                      <span className="badge">To Do</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <div className="section-bar">
+                <label className="review-confirmation">
+                  <input type="checkbox" checked={todoConfirmed} onChange={(event) => props.onConfirmTodo(event.target.checked)} />
+                  Tôi xác nhận các công việc trên chưa bắt đầu
+                </label>
+                <button type="button" className="button quiet" onClick={props.onOpenKanban}>Cập nhật trên Kanban</button>
+              </div>
+            </section>
+          )}
           <div className="flex flex-wrap items-center gap-2">
-            <button className="button" disabled={!props.canRequest || !nextDate || !!dateError} onClick={() => props.onRequest(false)}>Kiểm tra tiến độ</button>
-            <button className="button primary" disabled={!props.canRequest || !nextDate || !!dateError} onClick={() => props.onRequest(true)}>
-              {phase === "rescheduling" && <LoaderCircle size={15} className="busy-icon" aria-hidden="true" />}
-              {phase === "rescheduling" ? "Đang tính lịch mới…" : "Đề xuất lịch mới"}
+            <button className="button" disabled={!props.canRequest} onClick={() => props.onRequest(false)}>Kiểm tra tiến độ</button>
+            <button className="button primary schedule-action" disabled={!props.canRequest || needsReview}
+              aria-describedby={needsReview ? "progress-review-heading" : undefined} onClick={() => props.onRequest(true)}>
+              {replanning && <LoaderCircle size={15} className="busy-icon" aria-hidden="true" />}
+              {replanning ? props.pendingMessage : "Đề xuất lịch mới"}
             </button>
-            {props.pendingMessage && <span className="helper">{props.pendingMessage}</span>}
+            {phase === "checkingProgress" && <span className="helper">{props.pendingMessage}</span>}
           </div>
           {props.projectNeedsCorrections && <p className="notice warning">Sửa các điều kiện trong mục <button className="underline" onClick={props.onOpenPlanning}>Lập lịch</button> trước khi gửi tiến độ.</p>}
-          {!asOf && <p className="helper">Chọn ngày báo cáo để kiểm tra tiến độ hoặc đề xuất lịch mới.</p>}
+          {!asOfInput && <p className="helper">Chọn ngày báo cáo để kiểm tra tiến độ hoặc đề xuất lịch mới.</p>}
           {feedback && (
             <div className={`notice ${feedback.errors.length ? "error" : "success"}`} role={feedback.errors.length ? "alert" : undefined}>
               <p className="font-medium">{feedback.message}</p>

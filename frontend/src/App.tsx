@@ -1,11 +1,14 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { ArrowDown, ArrowRight, CalendarDays, ChartGantt, CircleHelp, Layers3, LayoutGrid, ListTodo, LoaderCircle, Play, Plus, Settings2, Sparkles, UsersRound } from "lucide-react";
-import { formatDate, isCalendarDate } from "./calendar";
+import { formatDate, parseDateInput } from "./calendar";
+import { DateField } from "./DateField";
 import { draftReady } from "./draft";
 import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
 import { hasSolution, initialPlans, planReducer } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
+import { todoTasksDueForReview } from "./progressReview";
+import { prepareScheduleResult } from "./schedulingFeedback";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
 import type { ParseRequest, PresetsMap, ProjectCalendar, ProjectDraft, ProgressSnapshot, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse } from "./types";
@@ -19,7 +22,7 @@ const EMPTY_PROJECT: SchedulingIR = {
   members: [],
   tasks: [],
 };
-const EMPTY_CALENDAR: ProjectCalendar = { project_start_date: "", target_deadline_date: null };
+const EMPTY_DATES = { start: "", deadline: "" };
 
 interface ProjectState {
   ir: SchedulingIR;
@@ -33,10 +36,10 @@ interface Feedback {
   errors: string[];
 }
 
-function calendarErrors(calendar: ProjectCalendar) {
+function calendarErrors(calendar: ProjectCalendar, deadlineInput: string) {
   const { project_start_date: start, target_deadline_date: deadline } = calendar;
-  if (!isCalendarDate(start)) return ["Chọn ngày bắt đầu dự án hợp lệ."];
-  if (deadline && !isCalendarDate(deadline)) return ["Chọn hạn chót hợp lệ hoặc để trống."];
+  if (!start) return ["Nhập ngày bắt đầu dự án theo định dạng DD/MM/YYYY."];
+  if (deadlineInput.trim() && !deadline) return ["Nhập hạn chót theo định dạng DD/MM/YYYY hoặc để trống."];
   if (deadline && deadline < start) return ["Hạn chót mục tiêu không được trước ngày bắt đầu dự án."];
   return [];
 }
@@ -116,10 +119,15 @@ const REQUEST_STATUS = {
   generating: "Đang chờ bản nháp từ Gemini…",
   confirming: "Đang kiểm tra dữ liệu đã xác nhận…",
   validating: "Đang kiểm tra dự án…",
-  solving: "CP-SAT đang tính lịch…",
+  validatingSchedule: "Đang kiểm tra dự án…",
+  solving: "Đang tính lịch…",
+  preparingSchedule: "Đang hiển thị kết quả…",
   checkingProgress: "Đang kiểm tra tiến độ…",
-  rescheduling: "CP-SAT đang tính lịch mới…",
+  rescheduling: "Đang tính lịch mới…",
+  preparingRecovery: "Đang hiển thị kết quả…",
 };
+
+type SchedulePhase = Exclude<keyof typeof REQUEST_STATUS, "generating" | "confirming">;
 
 function SectionTitle({ id, icon: Icon, children }: {
   id: string;
@@ -147,11 +155,16 @@ export default function App() {
   const [draftError, setDraftError] = useState("");
   const [pendingDraft, setPendingDraft] = useState<ProjectDraft | null>(null);
   const [editing, setEditing] = useState<number | "new" | null>(null);
-  const [calendar, setCalendar] = useState(EMPTY_CALENDAR);
-  const [asOf, setAsOf] = useState("");
+  const [dateInputs, setDateInputs] = useState(EMPTY_DATES);
+  const [asOfInput, setAsOfInput] = useState("");
+  const calendar: ProjectCalendar = {
+    project_start_date: parseDateInput(dateInputs.start) ?? "",
+    target_deadline_date: parseDateInput(dateInputs.deadline),
+  };
+  const asOf = parseDateInput(asOfInput) ?? "";
   const [entries, setEntries] = useState<ReadonlyMap<string, string>>(new Map());
   const [plans, dispatchPlan] = useReducer(planReducer, initialPlans);
-  const [phase, setPhase] = useState<"validating" | "solving" | "checkingProgress" | "rescheduling" | null>(null);
+  const [phase, setPhase] = useState<SchedulePhase | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [progressFeedback, setProgressFeedback] = useState<Feedback | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
@@ -183,15 +196,19 @@ export default function App() {
   const editVersion = useRef(0);
   const nextMemberId = useRef(1);
 
-  const dateErrors = calendarErrors(calendar);
+  const dateErrors = calendarErrors(calendar, dateInputs.deadline);
   const localErrors = [...dateErrors, ...schedulingErrors(ir)];
-  const { accepted, proposal } = plans;
-  const outdated = accepted !== null && accepted.scheduleRevision !== scheduleRevision;
+  const { accepted, proposal, todoConfirmed } = plans;
+  const outdated = accepted !== null && (accepted.scheduleRevision !== scheduleRevision ||
+    accepted.calendar.project_start_date !== calendar.project_start_date);
   const completed = new Map((accepted?.recovery?.completed_tasks ?? []).map((task) => [task.id, task]));
   const lockedTasks = new Set(completed.keys());
   const acceptedAsOf = accepted?.recovery?.progress_as_of_date ?? "";
   const minimumAsOf = acceptedAsOf > calendar.project_start_date ? acceptedAsOf : calendar.project_start_date;
-  const progressPhase = phase === "checkingProgress" || phase === "rescheduling" ? phase : null;
+  const validReportingDate = !!asOf && asOf >= minimumAsOf && asOf < "9999-12-31";
+  const todoReview = todoTasksDueForReview(accepted, ir.tasks, validReportingDate ? asOf : "");
+  const progressPhase = phase === "checkingProgress" || phase === "rescheduling" || phase === "preparingRecovery" ? phase : null;
+  const planningPhase = progressPhase ? null : phase;
   const editedTask = editing === "new" ? newTask(ir) : editing === null ? null : ir.tasks[editing];
 
   useEffect(() => {
@@ -201,6 +218,8 @@ export default function App() {
       .catch((error) => { if (!controller.signal.aborted) setPresetError(errorMessage(error)); });
     return () => controller.abort();
   }, [presetRequest]);
+
+  useEffect(() => () => activeRequest.current?.abort(), []);
 
   function cancelScheduling() {
     activeRequest.current?.abort();
@@ -226,10 +245,10 @@ export default function App() {
     }));
   }
 
-  function changeCalendar(next: ProjectCalendar) {
-    if (next.project_start_date === calendar.project_start_date && next.target_deadline_date === calendar.target_deadline_date) return;
-    changeProject((current) => current, next.project_start_date !== calendar.project_start_date);
-    setCalendar(next);
+  function changeCalendar(field: keyof typeof EMPTY_DATES, value: string) {
+    if (dateInputs[field] === value) return;
+    changeProject((current) => current, false);
+    setDateInputs((current) => ({ ...current, [field]: value }));
   }
 
   function loadProject(next: SchedulingIR, preset?: string) {
@@ -246,8 +265,8 @@ export default function App() {
     setFeedback(null);
     setProgressFeedback(null);
     setEditing(null);
-    if (preset !== undefined) setCalendar(EMPTY_CALENDAR);
-    setAsOf("");
+    if (preset !== undefined) setDateInputs(EMPTY_DATES);
+    setAsOfInput("");
     setEntries(new Map());
   }
 
@@ -299,7 +318,8 @@ export default function App() {
     const controller = new AbortController();
     activeRequest.current = controller;
     const { signal } = controller;
-    setPhase("validating");
+    const startedAt = performance.now();
+    setPhase(solve ? "validatingSchedule" : "validating");
     setFeedback(null);
     const report = (message: string, errors: string[] = []) => setFeedback({ message, errors });
     try {
@@ -325,6 +345,7 @@ export default function App() {
       } else if (!solvedCalendar?.final_work_date || !solved.scheduled_tasks.length) {
         report("Không thể hiển thị lịch", ["API chưa trả về lịch theo ngày. Kiểm tra phiên bản máy chủ."]);
       } else {
+        if (!(await prepareScheduleResult(startedAt, signal, () => setPhase("preparingSchedule")))) return;
         dispatchPlan({ type: "propose", revision: plans.revision, plan: {
           calendar: solvedCalendar, status: solved.status, scheduledTasks: solved.scheduled_tasks,
           solveTimeMs: solved.solve_time_ms, tasks: ir.tasks, members, scheduleRevision, recovery: null,
@@ -334,7 +355,7 @@ export default function App() {
     } catch (error) {
       if (!signal.aborted) report("Yêu cầu lập lịch chưa hoàn tất", [errorMessage(error)]);
     } finally {
-      if (activeRequest.current === controller) {
+      if (!signal.aborted && activeRequest.current === controller) {
         activeRequest.current = null;
         setPhase(null);
       }
@@ -342,7 +363,8 @@ export default function App() {
   }
 
   async function requestRecovery(solve: boolean) {
-    if (activeRequest.current || !accepted || localErrors.length || !isCalendarDate(asOf) || asOf < minimumAsOf || asOf === "9999-12-31") return;
+    if (activeRequest.current || !accepted || localErrors.length || !validReportingDate) return;
+    if (solve && todoReview.length > 0 && !todoConfirmed) return;
     const taskProgress: [string, ProgressSnapshot["task_progress"][string]][] = [];
     const errors: string[] = [];
     for (const task of ir.tasks) {
@@ -352,8 +374,9 @@ export default function App() {
         if (!Number.isSafeInteger(duration) || duration < 1) errors.push(`Nhập số ngày còn lại là số nguyên dương cho '${task.id}'.`);
         else taskProgress.push([task.id, { remaining_duration: duration }]);
       } else if (task.status === "Done") {
-        const finish = completed.get(task.id)?.actual_finish_date ?? value;
+        const finish = completed.get(task.id)?.actual_finish_date ?? parseDateInput(value ?? "");
         if (finish) taskProgress.push([task.id, { actual_finish_date: finish }]);
+        else if (value?.trim()) errors.push(`Nhập ngày hoàn thành thực tế của ${task.id} theo định dạng DD/MM/YYYY.`);
       }
     }
     const report = (message: string, errors: string[] = []) => setProgressFeedback({ message, errors });
@@ -365,6 +388,7 @@ export default function App() {
     const controller = new AbortController();
     activeRequest.current = controller;
     const { signal } = controller;
+    const startedAt = performance.now();
     setPhase(solve ? "rescheduling" : "checkingProgress");
     setProgressFeedback(null);
     if (solve && proposal) dispatchPlan({ type: "cancel" });
@@ -384,6 +408,7 @@ export default function App() {
         report(message, [...revised.errors, "Lịch đang áp dụng vẫn được giữ."]);
         return;
       }
+      if (!(await prepareScheduleResult(startedAt, signal, () => setPhase("preparingRecovery")))) return;
       const { status, scheduled_tasks, solve_time_ms, errors: _errors, ...rest } = revised;
       const { progress_as_of_date, replanning_start_day, replanning_start_date, remaining_horizon_days, completed_tasks, ...finish } = rest;
       dispatchPlan({ type: "propose", revision: plans.revision, plan: {
@@ -395,7 +420,7 @@ export default function App() {
     } catch (error) {
       if (!signal.aborted) report("Yêu cầu lập lại lịch chưa hoàn tất", [errorMessage(error)]);
     } finally {
-      if (activeRequest.current === controller) {
+      if (!signal.aborted && activeRequest.current === controller) {
         activeRequest.current = null;
         setPhase(null);
       }
@@ -518,7 +543,7 @@ export default function App() {
   }
 
   const unassigned = ir.tasks.filter((task) => task.assignee_id == null).length;
-  const busy = draftPhase ?? phase;
+  const busy = workspace === "setup" ? draftPhase ?? phase : phase ?? draftPhase;
   const currentFeedback = workspace === "planning" ? feedback : workspace === "recovery" ? progressFeedback : null;
   const announcement = busy ? REQUEST_STATUS[busy] : currentFeedback && !currentFeedback.errors.length ? currentFeedback.message
     : workspace === "setup" && pendingDraft && !parseError ? "Bản nháp Gemini đã sẵn sàng để xem lại." : "";
@@ -529,13 +554,9 @@ export default function App() {
       <aside className="app-rail">
         <div className="brand">
           <span className="brand-mark"><Layers3 size={18} aria-hidden="true" /></span>
-          <span className="min-w-0">
-            <span className="block font-semibold">ConstraintLens</span>
-            <span className="helper block">Lập kế hoạch dự án</span>
-          </span>
+          <span className="font-semibold">ConstraintLens</span>
         </div>
         <nav aria-label="Không gian dự án" className="workspace-nav">
-          <p className="eyebrow nav-label">Không gian dự án</p>
           {WORKSPACES.map(({ id, label, icon: Icon }) => (
             <button key={id} type="button" aria-current={workspace === id ? "page" : undefined}
               aria-controls={`workspace-${id}`} className="workspace-link" onClick={() => goTo(id)}>
@@ -561,7 +582,7 @@ export default function App() {
         </header>
 
         <div className="workspace">
-          <section id="workspace-setup" aria-labelledby="setup-heading" hidden={workspace !== "setup"} className="workspace-view">
+          <section id="workspace-setup" aria-labelledby="setup-heading" hidden={workspace !== "setup"} className="workspace-view setup-view">
             <div className="page-heading">
               <div>
                 <h2 id="setup-heading" tabIndex={-1}>Thiết lập dự án</h2>
@@ -570,10 +591,9 @@ export default function App() {
               <button className="button" onClick={() => goTo("planning")}>Đến kế hoạch <ArrowRight size={15} aria-hidden="true" /></button>
             </div>
             <div className="setup-grid">
-              <section className="panel section-pad" aria-labelledby="source-heading">
-                <SectionTitle id="source-heading" icon={Sparkles}>Khởi tạo công việc</SectionTitle>
-                <p className="helper">Bắt đầu từ kịch bản mẫu, mô tả dự án hoặc nhập từng công việc.</p>
-                <div className="mt-4 space-y-2">
+              <section className="setup-source" aria-labelledby="source-heading">
+                <SectionTitle id="source-heading" icon={ListTodo}>Khởi tạo công việc</SectionTitle>
+                <div className="setup-source-options">
                   <label className="field">Kịch bản mẫu
                     <select className="control w-full" value={selectedPreset} onChange={(event) => {
                       const key = event.target.value;
@@ -583,64 +603,55 @@ export default function App() {
                       {Object.keys(presets).map((name) => <option key={name}>{name}</option>)}
                     </select>
                   </label>
-                  {presetError && (
-                    <div role="alert" className="notice error">
-                      <p>{presetError}</p>
-                      <button className="button mt-2" onClick={() => {
-                        setPresetError("");
-                        setPresetRequest((number) => number + 1);
-                      }}>Tải lại kịch bản</button>
-                    </div>
-                  )}
+                  <button className="button" aria-label="Thêm công việc thủ công" onClick={() => openTaskEditor("new")}>
+                    <Plus size={15} aria-hidden="true" /> Thêm thủ công
+                  </button>
                 </div>
-                <div className="section-rule">
-                  <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void parseProject(); }}>
-                    <label className="field">Mô tả dự án
-                      <textarea className="control min-h-28 w-full resize-y leading-relaxed" value={prompt} maxLength={12000}
-                        aria-describedby="description-help"
-                        placeholder="Ví dụ: Thiết kế giao diện trong 3 ngày, sau đó lập trình chức năng đăng nhập."
-                        onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
-                          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                            event.preventDefault();
-                            void parseProject();
-                          }
-                        }} />
-                    </label>
-                    <p id="description-help" className="text-xs text-zinc-400">Viết bằng tiếng Việt hoặc tiếng Anh. Nếu biết, hãy ghi số ngày và việc cần hoàn thành trước.</p>
+                {presetError && (
+                  <div role="alert" className="notice error">
+                    <p>{presetError}</p>
+                    <button className="button mt-2" onClick={() => {
+                      setPresetError("");
+                      setPresetRequest((number) => number + 1);
+                    }}>Tải lại kịch bản</button>
+                  </div>
+                )}
+                <form className="setup-description" onSubmit={(event) => { event.preventDefault(); void parseProject(); }}>
+                  <label className="field">Mô tả dự án
+                    <textarea className="control w-full resize-y leading-relaxed" rows={4} value={prompt} maxLength={12000}
+                      aria-describedby="description-help"
+                      placeholder="Ví dụ: Thiết kế giao diện trong 3 ngày, sau đó lập trình chức năng đăng nhập."
+                      onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
+                        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                          event.preventDefault();
+                          void parseProject();
+                        }
+                      }} />
+                  </label>
+                  <p id="description-help" className="helper">Ghi số ngày và công việc cần hoàn thành trước nếu đã biết.</p>
+                  <div className="setup-draft-actions">
                     <button className="button primary" disabled={!!draftPhase || !prompt.trim()}>
                       {draftPhase === "generating" ? <LoaderCircle size={15} className="busy-icon" aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}
                       {draftPhase === "generating" ? "Đang tạo bản nháp…" : pendingDraft ? "Tạo lại bản nháp với Gemini" : "Tạo bản nháp với Gemini"}
                     </button>
-                    {draftPhase === "generating" && <p className="helper">{REQUEST_STATUS.generating}</p>}
-                    {parseError && (
-                      <div className="notice error">
-                        <p role="alert">{parseError}</p>
-                        <button type="button" className="button mt-2" onClick={() => openTaskEditor("new")}>Thêm công việc thủ công</button>
-                      </div>
-                    )}
-                    {pendingDraft && <a href="#draft-heading" className="text-link block">Xem bản nháp</a>}
-                  </form>
-                </div>
-                {!parseError && <button className="button quiet mt-2" onClick={() => openTaskEditor("new")}><Plus size={14} aria-hidden="true" /> Thêm công việc thủ công</button>}
-              </section>
-              <div className="min-w-0 space-y-4">
-                <section className="panel section-pad" aria-labelledby="calendar-heading">
-                  <SectionTitle id="calendar-heading" icon={CalendarDays}>Lịch dự án</SectionTitle>
-                  <p className="helper">Lịch tính theo ngày dương lịch, kể cả cuối tuần.</p>
-                  <div className="mt-4 grid gap-3 min-[480px]:grid-cols-2">
-                    <label className="field">Ngày bắt đầu dự án
-                      <input type="date" required className="control w-full" value={calendar.project_start_date}
-                        onChange={(event) => changeCalendar({ ...calendar, project_start_date: event.target.value })} />
-                    </label>
-                    <label className="field">Hạn chót mục tiêu (tùy chọn)
-                      <input type="date" className="control w-full" min={calendar.project_start_date || undefined}
-                        value={calendar.target_deadline_date ?? ""}
-                        onChange={(event) => changeCalendar({ ...calendar, target_deadline_date: event.target.value || null })} />
-                    </label>
+                    {pendingDraft && <a href="#draft-heading" className="text-link">Xem bản nháp</a>}
                   </div>
-                  {calendar.project_start_date && dateErrors.length > 0 && <p className="notice warning mt-3" role="alert">{dateErrors[0]}</p>}
+                  {draftPhase === "generating" && <p className="helper">{REQUEST_STATUS.generating}</p>}
+                  {parseError && <p role="alert" className="notice error">{parseError}</p>}
+                </form>
+              </section>
+              <div className="setup-details">
+                <section aria-labelledby="calendar-heading">
+                  <SectionTitle id="calendar-heading" icon={CalendarDays}>Lịch dự án</SectionTitle>
+                  <div className="setup-calendar-fields">
+                    <DateField label="Ngày bắt đầu dự án" value={dateInputs.start} required
+                      onChange={(value) => changeCalendar("start", value)} />
+                    <DateField label="Hạn chót (tùy chọn)" value={dateInputs.deadline} min={calendar.project_start_date || undefined}
+                      onChange={(value) => changeCalendar("deadline", value)} />
+                  </div>
+                  <p className="helper mt-2">Lịch tính theo ngày dương lịch, kể cả cuối tuần.</p>
                 </section>
-                <div className="panel section-pad">
+                <div className="section-rule">
                   <Members key={instance} members={members} tasks={ir.tasks} onAdd={addMember}
                     onRename={(id, name) => {
                       if (members.find((member) => member.id === id)?.name === name) return;
@@ -688,15 +699,15 @@ export default function App() {
                   {accepted ? <button className="button primary" onClick={() => goTo("recovery", "progress-heading")}>
                     Cập nhật tiến độ <ArrowRight size={15} aria-hidden="true" />
                   </button> : (
-                    <button className="button primary" disabled={!!phase || localErrors.length > 0}
+                    <button className="button primary schedule-action" disabled={!!phase || localErrors.length > 0}
                       aria-describedby={localErrors.length ? "solve-requirements" : undefined} onClick={() => void validateProject(true)}>
-                      {phase ? <LoaderCircle size={15} className="busy-icon" aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
-                      {phase === "solving" ? "Đang tính lịch…" : "Tính lịch ban đầu"}
+                      {planningPhase && planningPhase !== "validating" ? <LoaderCircle size={15} className="busy-icon" aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
+                      {planningPhase && planningPhase !== "validating" ? REQUEST_STATUS[planningPhase] : "Tính lịch ban đầu"}
                     </button>
                   )}
                 </div>
               </div>
-              {(phase === "validating" || phase === "solving") && <p className="notice">{REQUEST_STATUS[phase]}</p>}
+              {planningPhase === "validating" && <p className="helper">{REQUEST_STATUS.validating}</p>}
               {localErrors.length > 0 && (
                 <div id="solve-requirements" className="notice warning">
                   <p className="font-semibold">Cần hoàn tất trước khi lập lịch</p>
@@ -769,13 +780,22 @@ export default function App() {
               <Kanban key={instance} tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor}
                 onMove={(index, status) => updateTask(index, { status }, false)} />
             </section>
-            <ProgressEditor key={instance} calendar={calendar} tasks={ir.tasks} asOf={asOf} entries={entries} completed={completed}
-              hasAcceptedPlan={!!accepted} minimumAsOf={minimumAsOf} canRequest={!phase && !localErrors.length}
+            <ProgressEditor key={instance} calendar={calendar} tasks={ir.tasks} asOf={asOf} asOfInput={asOfInput} entries={entries} completed={completed}
+              hasAcceptedPlan={!!accepted} minimumAsOf={minimumAsOf} canRequest={!phase && !localErrors.length && validReportingDate}
               projectNeedsCorrections={localErrors.length > 0} onOpenPlanning={() => goTo("planning", "solve-heading")}
               phase={progressPhase} pendingMessage={progressPhase ? REQUEST_STATUS[progressPhase] : ""}
               feedback={progressFeedback} hasProposal={!!proposal?.plan.recovery}
-              onDateChange={(value) => changeProgress(() => setAsOf(value))}
-              onEntryChange={(id, value) => changeProgress(() => setEntries((current) => new Map(current).set(id, value)))}
+              todoReview={todoReview} todoConfirmed={todoConfirmed} onOpenKanban={() => goTo("recovery", "kanban-heading")}
+              onConfirmTodo={(confirmed) => {
+                if (confirmed) dispatchPlan({ type: "confirmTodo" });
+                else invalidateProposal();
+              }}
+              onDateChange={(value) => {
+                if (value !== asOfInput) changeProgress(() => setAsOfInput(value));
+              }}
+              onEntryChange={(id, value) => {
+                if (value !== (entries.get(id) ?? "")) changeProgress(() => setEntries((current) => new Map(current).set(id, value)));
+              }}
               onRequest={(solve) => void requestRecovery(solve)} />
             <section aria-labelledby="recovery-comparison-heading" className="space-y-3">
               <div className="section-bar">

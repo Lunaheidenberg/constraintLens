@@ -20,7 +20,15 @@ export function dateAtOffset(start: string, offset: number) {
   return new Date((utcDay(start) + offset) * DAY_MS).toISOString().split("T")[0];
 }
 
-export function formatDate(iso: string, withYear = true) {
+export function formatDate(iso: string) {
   const [year, month, day] = iso.split("-");
-  return withYear ? `${day}/${month}/${year}` : `${day}/${month}`;
+  return `${day}/${month}/${year}`;
+}
+
+export function parseDateInput(value: string) {
+  const parts = /^([0-9]{2})\/([0-9]{2})\/([0-9]{4})$/.exec(value.trim());
+  if (!parts) return null;
+  const [, day, month, year] = parts;
+  const iso = `${year}-${month}-${day}`;
+  return isCalendarDate(iso) ? iso : null;
 }
