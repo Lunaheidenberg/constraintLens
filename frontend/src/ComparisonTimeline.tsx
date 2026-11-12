@@ -1,8 +1,9 @@
-import { dateAtOffset, dayOffset, formatDate } from "./calendar";
+import { dayOffset, formatDate } from "./calendar";
 import type { ScheduleComparison, TaskComparison } from "./comparison";
+import { timelineAxis } from "./timeline";
 
 const previousBar = "border-dashed border-zinc-300 bg-zinc-600/45";
-const revisedBar = "border-indigo-300/80 bg-indigo-500";
+const revisedBar = "gantt-bar";
 
 export function taskTiming(task: TaskComparison["revised"]) {
   if (!task) return "Không có trong lịch";
@@ -27,15 +28,11 @@ export function ComparisonTimeline({ comparison, labels }: {
   const start = calendarDates[0];
   const last = calendarDates[calendarDates.length - 1];
   const span = dayOffset(start, last) + 1;
-  const crossesYear = start.slice(0, 4) !== last.slice(0, 4);
-  const width = Math.min(1450, Math.max(680, 184 + span * 22));
-  const tickStep = Math.ceil(span / (crossesYear ? 5 : 8));
-  const ticks = Array.from({ length: Math.ceil(span / tickStep) }, (_, index) => index * tickStep);
-  const percent = (offset: number) => `${100 * offset / span}%`;
+  const { width, ticks, position: percent } = timelineAxis(start, span);
   const position = (date: string, fraction = 0) => percent(dayOffset(start, date) + fraction);
   const grid = <>
-    {ticks.slice(1).map((day) => (
-      <span key={day} className="absolute inset-y-0 border-l border-zinc-800/80" style={{ left: percent(day) }} />
+    {ticks.slice(1).map(({ day }) => (
+      <span key={day} className="absolute inset-y-0 border-l border-zinc-700/60" style={{ left: percent(day) }} />
     ))}
     {deadline && <span className="absolute inset-y-0 z-10 border-l border-dashed border-amber-400/90"
       style={deadline.target === last ? { right: 0 } : { left: position(deadline.target, 1) }} />}
@@ -59,15 +56,16 @@ export function ComparisonTimeline({ comparison, labels }: {
           Lập lại lịch từ {formatDate(replanningDate)}{progressAsOf && ` · Tiến độ đến hết ${formatDate(progressAsOf)}`}
         </li>}
       </ul>
+      <p className="helper min-[760px]:hidden">Cuộn ngang để xem thêm ngày.</p>
       <div className="panel overflow-x-auto" role="region" aria-label="Biểu đồ Gantt so sánh" tabIndex={0}>
         <div className="divide-y divide-zinc-800" style={{ minWidth: width }}>
-          <div className="grid grid-cols-[184px_minmax(0,1fr)] bg-[#0d0d10]">
-            <div className="sticky left-0 z-20 bg-[#0d0d10] px-3 py-2 text-xs font-medium text-zinc-400">Công việc · Người phụ trách</div>
-            <div className="relative h-8 border-l border-zinc-800 font-mono text-[10px] text-zinc-300">
+          <div className="gantt-row gantt-axis">
+            <div className="gantt-label px-3 py-2 text-xs font-medium text-zinc-300">Công việc · Người phụ trách</div>
+            <div className="gantt-lane min-h-9 font-mono text-[11px] text-zinc-300">
               <div aria-hidden="true">{grid}</div>
-              {ticks.map((day) => (
+              {ticks.map(({ day, label }) => label && (
                 <span key={day} className="absolute top-2 whitespace-nowrap pl-1.5" style={{ left: percent(day) }}>
-                  {formatDate(dateAtOffset(start, day), crossesYear)}
+                  {label}
                 </span>
               ))}
             </div>
@@ -78,12 +76,12 @@ export function ComparisonTimeline({ comparison, labels }: {
             const afterAssignee = task.revised?.assignee ?? "Chưa phân công";
             const assignee = task.assigneeChanged ? `${beforeAssignee} → ${afterAssignee}` : task.revised ? afterAssignee : beforeAssignee;
             return (
-              <div key={task.id} className="grid grid-cols-[184px_minmax(0,1fr)]">
-                <div className="sticky left-0 z-20 min-w-0 break-words bg-[#121215] px-3 py-2 text-xs">
+              <div key={task.id} className="gantt-row">
+                <div className="gantt-label px-3 py-2 text-xs">
                   <div className="font-medium"><span className="mr-1.5 font-mono text-zinc-400">{task.id}</span>{name}</div>
                   <div className="mt-0.5 text-zinc-400">{assignee}</div>
                 </div>
-                <div className="relative min-h-12 border-l border-zinc-800" role="img"
+                <div className="gantt-lane min-h-12" role="img" tabIndex={0}
                   aria-label={`${name}. ${labels.previous}: ${taskTiming(task.previous)}. ${labels.revised}: ${taskTiming(task.revised)}.`}>
                   <div aria-hidden="true">{grid}</div>
                   {([["previous", task.previous], ["revised", task.revised]] as const).map(([side, snapshot]) => {
@@ -92,7 +90,7 @@ export function ComparisonTimeline({ comparison, labels }: {
                     const lane = previous ? "bottom-1/2 mb-0.5" : "top-1/2 mt-0.5";
                     const interval = snapshot?.interval;
                     if (snapshot?.actualFinish) return <span key={side} aria-hidden="true"
-                      className={`absolute ${lane} size-2.5 -translate-x-1/2 rotate-45 rounded-[1px] border border-emerald-300 ${previous ? "bg-[#121215]" : "bg-emerald-400"}`}
+                      className={`absolute ${lane} size-2.5 -translate-x-1/2 rotate-45 rounded-[1px] border border-emerald-300 ${previous ? "bg-[var(--panel)]" : "bg-emerald-400"}`}
                       style={{ left: position(snapshot.actualFinish, 0.5) }} title={`${label} · ${taskTiming(snapshot)}`} />;
                     if (!interval) return null;
                     return <span key={side} aria-hidden="true"

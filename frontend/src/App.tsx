@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
-import { CalendarDays, CircleHelp, LayoutGrid, ListTodo, LoaderCircle, Play } from "lucide-react";
-import { isCalendarDate } from "./calendar";
+import { ArrowDown, ArrowRight, CalendarDays, ChartGantt, CircleHelp, Layers3, LayoutGrid, ListTodo, LoaderCircle, Play, Plus, Settings2, Sparkles, UsersRound } from "lucide-react";
+import { formatDate, isCalendarDate } from "./calendar";
 import { draftReady } from "./draft";
 import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
@@ -104,15 +104,32 @@ function newTask(ir: SchedulingIR): Task {
   return { id: `T${number}`, name: "", duration: 1, dependencies: [], kanban_stage: category, category, status: "To Do", assignee_id: null };
 }
 
+type Workspace = "setup" | "planning" | "recovery";
+
+const WORKSPACES = [
+  { id: "setup", label: "Thiết lập", icon: Settings2 },
+  { id: "planning", label: "Kế hoạch", icon: CalendarDays },
+  { id: "recovery", label: "Tiến độ", icon: LayoutGrid },
+] as const;
+
+const REQUEST_STATUS = {
+  generating: "Đang chờ bản nháp từ Gemini…",
+  confirming: "Đang kiểm tra dữ liệu đã xác nhận…",
+  validating: "Đang kiểm tra dự án…",
+  solving: "CP-SAT đang tính lịch…",
+  checkingProgress: "Đang kiểm tra tiến độ…",
+  rescheduling: "CP-SAT đang tính lịch mới…",
+};
+
 function SectionTitle({ id, icon: Icon, children }: {
   id: string;
   icon: typeof LayoutGrid;
   children: React.ReactNode;
 }) {
   return (
-    <h2 id={id} tabIndex={-1} className="mb-2.5 flex items-center gap-2 text-sm font-semibold">
-      <Icon size={15} aria-hidden="true" className="text-zinc-400" /> {children}
-    </h2>
+    <h3 id={id} tabIndex={-1} className="section-title">
+      <Icon size={15} aria-hidden="true" className="section-icon" /> {children}
+    </h3>
   );
 }
 
@@ -138,7 +155,31 @@ export default function App() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [progressFeedback, setProgressFeedback] = useState<Feedback | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
-  const progressPanel = useRef<HTMLDetailsElement>(null);
+  const [workspace, setWorkspace] = useState<Workspace>("setup");
+  const focusTarget = useRef<string | null>(null);
+
+  function goTo(view: Workspace, target = `${view}-heading`) {
+    if (view === workspace) {
+      focusSection(target);
+    } else {
+      focusTarget.current = target;
+      setWorkspace(view);
+    }
+  }
+
+  function focusSection(id: string) {
+    const target = document.getElementById(id);
+    target?.focus({ preventScroll: true });
+    if (WORKSPACES.some((view) => id === `${view.id}-heading`)) window.scrollTo(0, 0);
+    else target?.scrollIntoView({ block: "start" });
+  }
+
+  useEffect(() => {
+    if (focusTarget.current) {
+      focusSection(focusTarget.current);
+      focusTarget.current = null;
+    }
+  }, [workspace]);
   const editVersion = useRef(0);
   const nextMemberId = useRef(1);
 
@@ -245,6 +286,7 @@ export default function App() {
       setPendingDraft(null);
       setParseError("");
       setFeedback({ message: "Đã áp dụng bản nháp. Chọn người phụ trách cho từng công việc.", errors: [] });
+      if (workspace === "setup") goTo("planning");
     } catch (error) {
       setDraftError(errorMessage(error));
     } finally {
@@ -441,200 +483,308 @@ export default function App() {
     update();
   }
 
-  return (
-    <div className="flex min-h-screen flex-col text-zinc-200 lg:h-screen lg:flex-row lg:overflow-hidden"
-      onChangeCapture={() => { editVersion.current += 1; }}>
-      <aside className="shrink-0 border-b border-zinc-800 bg-[#0d0d10] lg:w-[320px] lg:overflow-y-auto lg:border-b-0 lg:border-r">
-        <header className="flex items-center gap-2.5 border-b border-zinc-800 px-5 py-4">
-          <div className="grid size-8 place-items-center rounded-lg bg-indigo-600 text-white">
-            <LayoutGrid size={17} aria-hidden="true" />
-          </div>
+  function renderProposal() {
+    if (!proposal) return null;
+    const recovery = !!proposal.plan.recovery;
+    return (
+      <section id="schedule-proposal" tabIndex={-1} className="panel proposal result-enter" aria-labelledby="proposal-heading">
+        <div className="section-bar">
           <div>
-            <div className="text-sm font-semibold text-zinc-100">ConstraintLens</div>
-            <p className="text-xs text-zinc-400">Lập kế hoạch dự án</p>
+            <span className="badge badge-accent">Chờ chấp nhận</span>
+            <h4 id="proposal-heading" className="mt-2 text-base font-semibold">{recovery ? "Lịch mới đề xuất" : "Lịch ban đầu đề xuất"}</h4>
+            <p className="helper mt-1">{recovery ? "Lịch đang áp dụng được giữ đến khi bạn chấp nhận." : "Kiểm tra các mốc bên dưới trước khi chấp nhận lịch."}</p>
           </div>
-        </header>
-        <div className="space-y-5 p-5">
-          <div className="space-y-3">
-            <label className="field">Kịch bản mẫu
-              <select className="control w-full" value={selectedPreset} onChange={(event) => {
-                const key = event.target.value;
-                if (confirmReplace()) loadProject(presets[key], key);
-              }}>
-                <option value="" disabled>Chọn kịch bản mẫu</option>
-                {Object.keys(presets).map((name) => <option key={name}>{name}</option>)}
-              </select>
-            </label>
-            {presetError && (
-              <div role="alert" className="notice text-rose-300">
-                <p>{presetError}</p>
-                <button className="button mt-2" onClick={() => {
-                  setPresetError("");
-                  setPresetRequest((number) => number + 1);
-                }}>Tải lại kịch bản</button>
-              </div>
-            )}
-            <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void parseProject(); }}>
-              <label className="field">Mô tả dự án
-                <textarea className="control min-h-20 w-full resize-y leading-relaxed" value={prompt} maxLength={12000}
-                  aria-describedby="description-help"
-                  placeholder="Ví dụ: Thiết kế giao diện trong 3 ngày, sau đó lập trình chức năng đăng nhập."
-                  onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
-                    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                      event.preventDefault();
-                      void parseProject();
-                    }
-                  }} />
-              </label>
-              <p id="description-help" className="text-xs text-zinc-400">Viết bằng tiếng Việt hoặc tiếng Anh. Nếu biết, hãy ghi số ngày và việc cần hoàn thành trước.</p>
-              <button className="button w-full" disabled={!!draftPhase || !prompt.trim()}>
-                {draftPhase === "generating" && <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />}
-                {draftPhase === "generating" ? "Đang tạo bản nháp…" : pendingDraft ? "Tạo lại bản nháp với Gemini" : "Tạo bản nháp với Gemini"}
-              </button>
-              {parseError && (
-                <div className="notice">
-                  <p className="text-rose-300" role="alert">{parseError}</p>
-                  <button type="button" className="button mt-2" onClick={() => openTaskEditor("new")}>Thêm công việc thủ công</button>
-                </div>
-              )}
-              {pendingDraft && <a href="#project-draft" className="block text-xs text-indigo-300 hover:underline">Xem bản nháp</a>}
-            </form>
+          <div className="flex flex-wrap gap-2">
+            <button className="button" onClick={() => {
+              cancelScheduling();
+              dispatchPlan({ type: "cancel" });
+              setFeedback(null);
+              setProgressFeedback(null);
+              focusSection(recovery ? "progress-heading" : "schedule-heading");
+            }}>Hủy đề xuất</button>
+            <button className="button primary" disabled={!!phase} onClick={() => {
+              dispatchPlan({ type: "accept" });
+              editVersion.current += 1;
+              setFeedback(recovery ? null : { message: "Đã chấp nhận lịch ban đầu.", errors: [] });
+              setProgressFeedback(recovery ? { message: "Đã áp dụng lịch mới.", errors: [] } : null);
+              focusSection(recovery ? "recovery-comparison-heading" : "schedule-heading");
+            }}>Chấp nhận lịch</button>
           </div>
-
-          <div className="border-t border-zinc-800 pt-4">
-            <Members key={instance} members={members} tasks={ir.tasks} onAdd={addMember}
-              onRename={(id, name) => {
-                if (members.find((member) => member.id === id)?.name === name) return;
-                changeProject((current) => ({
-                  ...current,
-                  members: current.members?.map((member) => member.id === id ? { ...member, name } : member),
-                }), false);
-              }}
-              onRemove={(id) => {
-                if (ir.tasks.some((task) => task.assignee_id === id)) return;
-                changeProject((current) => ({ ...current, members: current.members?.filter((member) => member.id !== id) }));
-              }} />
-          </div>
-
-          <section aria-labelledby="planning-heading" className="space-y-2.5 border-t border-zinc-800 pt-4">
-            <h2 id="planning-heading" className="text-sm font-semibold">Lập lịch</h2>
-            <label className="field">Ngày bắt đầu dự án
-              <input type="date" required className="control w-full" value={calendar.project_start_date}
-                onChange={(event) => changeCalendar({ ...calendar, project_start_date: event.target.value })} />
-            </label>
-            <label className="field">Hạn chót mục tiêu (tùy chọn)
-              <input type="date" className="control w-full" min={calendar.project_start_date || undefined}
-                value={calendar.target_deadline_date ?? ""}
-                onChange={(event) => changeCalendar({ ...calendar, target_deadline_date: event.target.value || null })} />
-            </label>
-            <div className="grid grid-cols-[auto_1fr] gap-2">
-              <button className="button" disabled={!!phase || localErrors.length > 0} onClick={() => void validateProject(false)}>Kiểm tra</button>
-              {accepted ? <a href="#progress-heading" className="button justify-center" onClick={() => {
-                if (progressPanel.current) progressPanel.current.open = true;
-              }}>Cập nhật tiến độ</a> : (
-                <button className="button primary" disabled={!!phase || localErrors.length > 0} onClick={() => void validateProject(true)}>
-                  {phase ? <LoaderCircle size={14} className="animate-spin" aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
-                  Tính lịch ban đầu
-                </button>
-              )}
-            </div>
-            {(phase === "validating" || phase === "solving") && <p className="text-xs text-zinc-400" role="status">{phase === "validating" ? "Đang kiểm tra dự án…" : "CP-SAT đang tính lịch…"}</p>}
-            {localErrors.length > 0 && (
-              <ul className="notice list-disc space-y-1 pl-6 text-amber-200" aria-label="Điều kiện lập lịch">
-                {localErrors.map((error, index) => <li key={index}>{error}</li>)}
-              </ul>
-            )}
-            {feedback && (
-              <div className={`notice ${feedback.errors.length ? "text-rose-300" : "text-emerald-300"}`}
-                role={feedback.errors.length ? "alert" : "status"}>
-                <p className="font-medium">{feedback.message}</p>
-                {feedback.errors.length > 0 && (
-                  <ul className="mt-1 list-disc space-y-1 whitespace-pre-line pl-4">
-                    {feedback.errors.map((error, index) => <li key={index}>{error}</li>)}
-                  </ul>
-                )}
-              </div>
-            )}
-            {(accepted || proposal) && (
-              <a href={proposal ? "#schedule-proposal" : plans.previous ? "#schedule-comparison" : "#schedule-heading"}
-                className="inline-flex items-center gap-1.5 rounded text-xs font-medium text-indigo-300 hover:underline">
-                <CalendarDays size={14} aria-hidden="true" /> {accepted && (proposal || plans.previous) ? "Xem so sánh lịch" : "Xem biểu đồ Gantt"}
-              </a>
-            )}
-          </section>
         </div>
+        {recovery ? <PlanComparison plans={plans} />
+          : <Schedule plan={proposal.plan} members={members} deadline={proposal.plan.calendar.target_deadline_date} />}
+      </section>
+    );
+  }
+
+  const unassigned = ir.tasks.filter((task) => task.assignee_id == null).length;
+  const busy = draftPhase ?? phase;
+  const currentFeedback = workspace === "planning" ? feedback : workspace === "recovery" ? progressFeedback : null;
+  const announcement = busy ? REQUEST_STATUS[busy] : currentFeedback && !currentFeedback.errors.length ? currentFeedback.message
+    : workspace === "setup" && pendingDraft && !parseError ? "Bản nháp Gemini đã sẵn sàng để xem lại." : "";
+  return (
+    <div className="app-shell" onChangeCapture={() => { editVersion.current += 1; }}>
+      <a className="skip-link" href="#project-heading">Đến nội dung dự án</a>
+      <p role="status" className="sr-only">{announcement}</p>
+      <aside className="app-rail">
+        <div className="brand">
+          <span className="brand-mark"><Layers3 size={18} aria-hidden="true" /></span>
+          <span className="min-w-0">
+            <span className="block font-semibold">ConstraintLens</span>
+            <span className="helper block">Lập kế hoạch dự án</span>
+          </span>
+        </div>
+        <nav aria-label="Không gian dự án" className="workspace-nav">
+          <p className="eyebrow nav-label">Không gian dự án</p>
+          {WORKSPACES.map(({ id, label, icon: Icon }) => (
+            <button key={id} type="button" aria-current={workspace === id ? "page" : undefined}
+              aria-controls={`workspace-${id}`} className="workspace-link" onClick={() => goTo(id)}>
+              <Icon size={17} aria-hidden="true" />
+              {label}
+              {(id === "setup" && pendingDraft || id === "planning" && proposal && !proposal.plan.recovery ||
+                id === "recovery" && proposal?.plan.recovery) &&
+                <span className="nav-indicator"><span className="sr-only">Có bản xem trước</span></span>}
+            </button>
+          ))}
+        </nav>
       </aside>
 
-      <main className="min-w-0 flex-1 lg:overflow-y-auto">
-        <header className="border-b border-zinc-800 px-4 py-4 sm:px-6">
-          <h1 className="break-words text-lg font-semibold tracking-tight text-zinc-100">{ir.project_name}</h1>
-          <p className="mt-1 text-xs text-zinc-400">{ir.tasks.length} công việc · {members.length} thành viên</p>
+      <main className="min-w-0">
+        <header className="project-bar">
+          <div className="project-bar-inner">
+            <h1 id="project-heading" tabIndex={-1} className="min-w-0 break-words text-sm font-semibold">{ir.project_name}</h1>
+            <div className="project-counts">
+              <span><ListTodo size={14} aria-hidden="true" /> {ir.tasks.length} công việc</span>
+              <span><UsersRound size={14} aria-hidden="true" /> {members.length} thành viên</span>
+            </div>
+          </div>
         </header>
-        <div className="space-y-6 p-4 sm:p-6">
-          {pendingDraft && (
-            <DraftEditor draft={pendingDraft} busy={!!draftPhase} confirming={draftPhase === "confirming"} error={draftError}
-              replacing={ir.tasks.length > 0} onChange={(draft) => { setPendingDraft(draft); setDraftError(""); }}
-              onConfirm={() => void confirmDraft()} onCancel={() => { setPendingDraft(null); setDraftError(""); }} />
-          )}
-          <section aria-labelledby="tasks-heading">
-            <SectionTitle id="tasks-heading" icon={ListTodo}>Công việc</SectionTitle>
-            <TaskTable tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor} onAdd={() => openTaskEditor("new")}
-              onAssign={(index, assignee_id) => updateTask(index, { assignee_id })} />
-          </section>
-          <section aria-labelledby="kanban-heading">
-            <SectionTitle id="kanban-heading" icon={LayoutGrid}>Kanban · Tiến độ thực tế</SectionTitle>
-            <Kanban key={instance} tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor}
-              onMove={(index, status) => updateTask(index, { status }, false)} />
-          </section>
-          <ProgressEditor key={instance} panelRef={progressPanel} calendar={calendar} tasks={ir.tasks} asOf={asOf} entries={entries} completed={completed}
-            hasAcceptedPlan={!!accepted} minimumAsOf={minimumAsOf} canRequest={!phase && !localErrors.length}
-            projectNeedsCorrections={localErrors.length > 0}
-            phase={progressPhase} feedback={progressFeedback} hasProposal={!!proposal?.plan.recovery}
-            onDateChange={(value) => changeProgress(() => setAsOf(value))}
-            onEntryChange={(id, value) => changeProgress(() => setEntries((current) => new Map(current).set(id, value)))}
-            onRequest={(solve) => void requestRecovery(solve)} />
-          <section aria-labelledby="schedule-heading">
-            <SectionTitle id="schedule-heading" icon={CalendarDays}>Gantt · Lịch dự kiến</SectionTitle>
-            <div className="space-y-4">
-              {plans.stale && <p className="notice text-amber-200" role="status">Đã bỏ đề xuất vì dữ liệu thay đổi. Hãy tính lại lịch.</p>}
-              {proposal && (
-                <section id="schedule-proposal" className="space-y-3 rounded-lg border border-indigo-500/60 p-3" aria-labelledby="proposal-heading">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 id="proposal-heading" className="text-sm font-semibold text-indigo-200">{proposal.plan.recovery ? "Lịch mới đề xuất" : "Lịch ban đầu đề xuất"}</h3>
-                    <div className="flex gap-2">
-                      <button className="button" onClick={() => {
-                        cancelScheduling();
-                        dispatchPlan({ type: "cancel" });
-                        setFeedback(null);
-                        setProgressFeedback(null);
-                      }}>Hủy đề xuất</button>
-                      <button className="button primary" disabled={!!phase} onClick={() => {
-                        dispatchPlan({ type: "accept" });
-                        editVersion.current += 1;
-                        setFeedback(null);
-                        setProgressFeedback(null);
-                      }}>Chấp nhận lịch</button>
+
+        <div className="workspace">
+          <section id="workspace-setup" aria-labelledby="setup-heading" hidden={workspace !== "setup"} className="workspace-view">
+            <div className="page-heading">
+              <div>
+                <h2 id="setup-heading" tabIndex={-1}>Thiết lập dự án</h2>
+                <p>Chọn điểm bắt đầu, thiết lập ngày và thêm người phụ trách.</p>
+              </div>
+              <button className="button" onClick={() => goTo("planning")}>Đến kế hoạch <ArrowRight size={15} aria-hidden="true" /></button>
+            </div>
+            <div className="setup-grid">
+              <section className="panel section-pad" aria-labelledby="source-heading">
+                <SectionTitle id="source-heading" icon={Sparkles}>Khởi tạo công việc</SectionTitle>
+                <p className="helper">Bắt đầu từ kịch bản mẫu, mô tả dự án hoặc nhập từng công việc.</p>
+                <div className="mt-4 space-y-2">
+                  <label className="field">Kịch bản mẫu
+                    <select className="control w-full" value={selectedPreset} onChange={(event) => {
+                      const key = event.target.value;
+                      if (confirmReplace()) loadProject(presets[key], key);
+                    }}>
+                      <option value="" disabled>Chọn kịch bản mẫu</option>
+                      {Object.keys(presets).map((name) => <option key={name}>{name}</option>)}
+                    </select>
+                  </label>
+                  {presetError && (
+                    <div role="alert" className="notice error">
+                      <p>{presetError}</p>
+                      <button className="button mt-2" onClick={() => {
+                        setPresetError("");
+                        setPresetRequest((number) => number + 1);
+                      }}>Tải lại kịch bản</button>
                     </div>
+                  )}
+                </div>
+                <div className="section-rule">
+                  <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void parseProject(); }}>
+                    <label className="field">Mô tả dự án
+                      <textarea className="control min-h-28 w-full resize-y leading-relaxed" value={prompt} maxLength={12000}
+                        aria-describedby="description-help"
+                        placeholder="Ví dụ: Thiết kế giao diện trong 3 ngày, sau đó lập trình chức năng đăng nhập."
+                        onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
+                          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                            event.preventDefault();
+                            void parseProject();
+                          }
+                        }} />
+                    </label>
+                    <p id="description-help" className="text-xs text-zinc-400">Viết bằng tiếng Việt hoặc tiếng Anh. Nếu biết, hãy ghi số ngày và việc cần hoàn thành trước.</p>
+                    <button className="button primary" disabled={!!draftPhase || !prompt.trim()}>
+                      {draftPhase === "generating" ? <LoaderCircle size={15} className="busy-icon" aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}
+                      {draftPhase === "generating" ? "Đang tạo bản nháp…" : pendingDraft ? "Tạo lại bản nháp với Gemini" : "Tạo bản nháp với Gemini"}
+                    </button>
+                    {draftPhase === "generating" && <p className="helper">{REQUEST_STATUS.generating}</p>}
+                    {parseError && (
+                      <div className="notice error">
+                        <p role="alert">{parseError}</p>
+                        <button type="button" className="button mt-2" onClick={() => openTaskEditor("new")}>Thêm công việc thủ công</button>
+                      </div>
+                    )}
+                    {pendingDraft && <a href="#draft-heading" className="text-link block">Xem bản nháp</a>}
+                  </form>
+                </div>
+                {!parseError && <button className="button quiet mt-2" onClick={() => openTaskEditor("new")}><Plus size={14} aria-hidden="true" /> Thêm công việc thủ công</button>}
+              </section>
+              <div className="min-w-0 space-y-4">
+                <section className="panel section-pad" aria-labelledby="calendar-heading">
+                  <SectionTitle id="calendar-heading" icon={CalendarDays}>Lịch dự án</SectionTitle>
+                  <p className="helper">Lịch tính theo ngày dương lịch, kể cả cuối tuần.</p>
+                  <div className="mt-4 grid gap-3 min-[480px]:grid-cols-2">
+                    <label className="field">Ngày bắt đầu dự án
+                      <input type="date" required className="control w-full" value={calendar.project_start_date}
+                        onChange={(event) => changeCalendar({ ...calendar, project_start_date: event.target.value })} />
+                    </label>
+                    <label className="field">Hạn chót mục tiêu (tùy chọn)
+                      <input type="date" className="control w-full" min={calendar.project_start_date || undefined}
+                        value={calendar.target_deadline_date ?? ""}
+                        onChange={(event) => changeCalendar({ ...calendar, target_deadline_date: event.target.value || null })} />
+                    </label>
                   </div>
-                  {accepted ? <PlanComparison plans={plans} />
-                    : <Schedule plan={proposal.plan} members={members} deadline={proposal.plan.calendar.target_deadline_date} />}
+                  {calendar.project_start_date && dateErrors.length > 0 && <p className="notice warning mt-3" role="alert">{dateErrors[0]}</p>}
                 </section>
+                <div className="panel section-pad">
+                  <Members key={instance} members={members} tasks={ir.tasks} onAdd={addMember}
+                    onRename={(id, name) => {
+                      if (members.find((member) => member.id === id)?.name === name) return;
+                      changeProject((current) => ({
+                        ...current,
+                        members: current.members?.map((member) => member.id === id ? { ...member, name } : member),
+                      }), false);
+                    }}
+                    onRemove={(id) => {
+                      if (ir.tasks.some((task) => task.assignee_id === id)) return;
+                      changeProject((current) => ({ ...current, members: current.members?.filter((member) => member.id !== id) }));
+                    }} />
+                </div>
+              </div>
+            </div>
+            {pendingDraft && (
+              <DraftEditor draft={pendingDraft} busy={!!draftPhase} confirming={draftPhase === "confirming"} error={draftError}
+                replacing={ir.tasks.length > 0} onChange={(draft) => { setPendingDraft(draft); setDraftError(""); }}
+                onConfirm={() => void confirmDraft()} onCancel={() => {
+                  setPendingDraft(null); setDraftError(""); focusSection("source-heading");
+                }} />
+            )}
+          </section>
+
+          <section id="workspace-planning" aria-labelledby="planning-heading" hidden={workspace !== "planning"} className="workspace-view">
+            <div className="page-heading">
+              <div>
+                <h2 id="planning-heading" tabIndex={-1}>Kế hoạch</h2>
+                <p>Phân công công việc và xem lịch dự kiến của nhóm.</p>
+              </div>
+              <button className="button" onClick={() => openTaskEditor("new")}><Plus size={16} aria-hidden="true" /> Thêm công việc</button>
+            </div>
+            <section className="panel section-pad space-y-3" aria-labelledby="solve-heading">
+              <div className="section-bar">
+                <div>
+                  <SectionTitle id="solve-heading" icon={ChartGantt}>Lập lịch</SectionTitle>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                    <p className="helper">Bắt đầu: {calendar.project_start_date ? formatDate(calendar.project_start_date) : "Chưa chọn"} · Hạn: {calendar.target_deadline_date ? formatDate(calendar.target_deadline_date) : "Chưa đặt"}</p>
+                    <button className="text-link" onClick={() => goTo("setup", "calendar-heading")}>Chỉnh ngày</button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="button" disabled={!!phase || localErrors.length > 0}
+                    aria-describedby={localErrors.length ? "solve-requirements" : undefined} onClick={() => void validateProject(false)}>Kiểm tra</button>
+                  {accepted ? <button className="button primary" onClick={() => goTo("recovery", "progress-heading")}>
+                    Cập nhật tiến độ <ArrowRight size={15} aria-hidden="true" />
+                  </button> : (
+                    <button className="button primary" disabled={!!phase || localErrors.length > 0}
+                      aria-describedby={localErrors.length ? "solve-requirements" : undefined} onClick={() => void validateProject(true)}>
+                      {phase ? <LoaderCircle size={15} className="busy-icon" aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
+                      {phase === "solving" ? "Đang tính lịch…" : "Tính lịch ban đầu"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {(phase === "validating" || phase === "solving") && <p className="notice">{REQUEST_STATUS[phase]}</p>}
+              {localErrors.length > 0 && (
+                <div id="solve-requirements" className="notice warning">
+                  <p className="font-semibold">Cần hoàn tất trước khi lập lịch</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-4" aria-label="Điều kiện lập lịch">
+                    {localErrors.map((error, index) => <li key={index}>{error}</li>)}
+                  </ul>
+                </div>
               )}
-              {accepted && !proposal && <PlanComparison plans={plans} />}
+              {feedback && (
+                <div className={`notice ${feedback.errors.length ? "error" : "success"}`}
+                  role={feedback.errors.length ? "alert" : undefined}>
+                  <p className="font-medium">{feedback.message}</p>
+                  {feedback.errors.length > 0 && (
+                    <ul className="mt-1 list-disc space-y-1 whitespace-pre-line pl-4">
+                      {feedback.errors.map((error, index) => <li key={index}>{error}</li>)}
+                    </ul>
+                  )}
+                  {(accepted || proposal) && !feedback.errors.length && (
+                    <a href={proposal && !proposal.plan.recovery ? "#schedule-proposal" : "#schedule-heading"} className="text-link mt-1 inline-flex items-center gap-1">
+                      Xem lịch <ArrowDown size={13} aria-hidden="true" />
+                    </a>
+                  )}
+                </div>
+              )}
+            </section>
+            <section aria-labelledby="tasks-heading" className="space-y-2">
+              <div className="section-bar">
+                <SectionTitle id="tasks-heading" icon={ListTodo}>Công việc</SectionTitle>
+                {unassigned > 0 && <span className="badge badge-warning">{unassigned} chưa phân công</span>}
+              </div>
+              <TaskTable tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor} onAdd={() => openTaskEditor("new")}
+                onAssign={(index, assignee_id) => updateTask(index, { assignee_id })} />
+            </section>
+            <section aria-labelledby="schedule-heading" className="space-y-3">
+              <SectionTitle id="schedule-heading" icon={ChartGantt}>Gantt · Lịch dự kiến</SectionTitle>
+              {plans.stale && !accepted && <p className="notice warning" role="status">Đã bỏ đề xuất vì dữ liệu thay đổi. Hãy tính lại lịch.</p>}
+              {proposal && !proposal.plan.recovery && renderProposal()}
               {accepted ? (
-                <section className="space-y-3" aria-labelledby="accepted-heading">
-                  <h3 id="accepted-heading" className="text-sm font-semibold text-emerald-300">Lịch đang áp dụng</h3>
-                  {outdated && <p className="notice text-amber-200" role="status">Lịch đang áp dụng đã lỗi thời. Lập lại lịch theo dữ liệu hiện tại để cập nhật.</p>}
+                <section className="panel section-pad space-y-3" aria-labelledby="accepted-heading">
+                  <div className="section-bar">
+                    <h4 id="accepted-heading" className="text-sm font-semibold">Lịch đang áp dụng</h4>
+                    <span className={`badge ${outdated ? "badge-warning" : "badge-success"}`}>{outdated ? "Cần cập nhật" : "Đã chấp nhận"}</span>
+                  </div>
+                  {outdated && <p className="notice warning">Dữ liệu dự án đã thay đổi. Lập lại lịch từ tiến độ để cập nhật kế hoạch.</p>}
                   <Schedule plan={accepted} members={members} deadline={accepted.calendar.project_start_date !== calendar.project_start_date
                     ? accepted.calendar.target_deadline_date : dateErrors.length ? null : calendar.target_deadline_date} />
                 </section>
               ) : !proposal && (
-                <div className="panel flex items-start gap-2.5 p-3 text-xs text-zinc-400" role="status">
-                  <CircleHelp size={15} className="shrink-0" aria-hidden="true" />
-                  Chọn ngày bắt đầu, phân công công việc rồi tính lịch ban đầu.
+                <div className="empty-state" role="status">
+                  <CircleHelp size={18} aria-hidden="true" />
+                  <div><p className="font-medium text-zinc-100">Chưa có lịch dự kiến</p><p>Chọn ngày bắt đầu, phân công công việc rồi tính lịch ban đầu.</p></div>
                 </div>
               )}
+            </section>
+          </section>
+
+          <section id="workspace-recovery" aria-labelledby="recovery-heading" hidden={workspace !== "recovery"} className="workspace-view">
+            <div className="page-heading">
+              <div>
+                <h2 id="recovery-heading" tabIndex={-1}>Tiến độ và lập lại lịch</h2>
+                <p>Cập nhật công việc thực tế và xem tác động đến lịch dự án.</p>
+              </div>
+              {accepted && <a className="button" href="#progress-heading">Báo cáo tiến độ <ArrowDown size={15} aria-hidden="true" /></a>}
             </div>
+            <section aria-labelledby="kanban-heading" className="space-y-3">
+              <div className="section-bar">
+                <SectionTitle id="kanban-heading" icon={LayoutGrid}>Bảng Kanban</SectionTitle>
+                <p className="helper">Kéo thẻ hoặc chọn Di chuyển để cập nhật trạng thái.</p>
+              </div>
+              <Kanban key={instance} tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor}
+                onMove={(index, status) => updateTask(index, { status }, false)} />
+            </section>
+            <ProgressEditor key={instance} calendar={calendar} tasks={ir.tasks} asOf={asOf} entries={entries} completed={completed}
+              hasAcceptedPlan={!!accepted} minimumAsOf={minimumAsOf} canRequest={!phase && !localErrors.length}
+              projectNeedsCorrections={localErrors.length > 0} onOpenPlanning={() => goTo("planning", "solve-heading")}
+              phase={progressPhase} pendingMessage={progressPhase ? REQUEST_STATUS[progressPhase] : ""}
+              feedback={progressFeedback} hasProposal={!!proposal?.plan.recovery}
+              onDateChange={(value) => changeProgress(() => setAsOf(value))}
+              onEntryChange={(id, value) => changeProgress(() => setEntries((current) => new Map(current).set(id, value)))}
+              onRequest={(solve) => void requestRecovery(solve)} />
+            <section aria-labelledby="recovery-comparison-heading" className="space-y-3">
+              <div className="section-bar">
+                <SectionTitle id="recovery-comparison-heading" icon={ChartGantt}>So sánh kế hoạch</SectionTitle>
+                {accepted && <button className="text-link" onClick={() => goTo("planning", "schedule-heading")}>Xem lịch đang áp dụng</button>}
+              </div>
+              {plans.stale && accepted && <p className="notice warning" role="status">Đã bỏ đề xuất vì dữ liệu thay đổi. Hãy tính lại lịch.</p>}
+              {proposal?.plan.recovery ? renderProposal() : <PlanComparison plans={plans} />}
+            </section>
           </section>
         </div>
       </main>

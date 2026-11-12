@@ -3,16 +3,7 @@ import type { Plan } from "./plans";
 import type { ProjectMember } from "./types";
 import { taskCategory } from "./ProjectEditor";
 
-// Keep the existing category colors for the planned timeline.
-const CATEGORY_COLORS = new Map(Object.entries({
-  Design: "#f59e0b",
-  Coding: "#6366f1",
-  Backend: "#6366f1",
-  Frontend: "#6366f1",
-  Dev: "#6366f1",
-  Review: "#a855f7",
-  Testing: "#10b981",
-}));
+import { timelineAxis } from "./timeline";
 
 export function Schedule({ plan, members, deadline }: {
   plan: Plan;
@@ -26,10 +17,7 @@ export function Schedule({ plan, members, deadline }: {
   // Both reference lines show boundaries. The deadline line is after the inclusive deadline date.
   const deadlineBoundary = deadline === null ? null : dayOffset(start, deadline) + 1;
   const endDay = Math.max(1, finish ?? 0, deadlineBoundary ?? 0, (replanningDay ?? 0) + 1);
-  const crossesYear = start.slice(0, 4) !== dateAtOffset(start, endDay - 1).slice(0, 4);
-  const tickStep = Math.ceil(endDay / (crossesYear ? 5 : 8));
-  const ticks = Array.from({ length: Math.ceil(endDay / tickStep) }, (_, index) => index * tickStep);
-  const position = (day: number) => `${(day / endDay) * 100}%`;
+  const { ticks, width, position } = timelineAxis(start, endDay);
   const taskById = new Map(plan.tasks.map((task) => [task.id, task]));
   const memberById = new Map([...plan.members, ...members].map((member) => [member.id, member.name]));
   const queueWait = scheduledTasks.reduce((total, task) => total + task.queue_wait_days, 0);
@@ -37,61 +25,71 @@ export function Schedule({ plan, members, deadline }: {
   const completionLabel = recovery?.remaining_horizon_days === 0 ? "Hoàn thành thực tế" : "Ngày làm việc cuối";
 
   const metrics = [
+    [completionLabel, calendar.final_work_date ? formatDate(calendar.final_work_date) : "Chưa rõ"],
+    ["Thời gian dự án", finish === null ? "Chưa rõ" : `${finish} ngày`],
+    ["Công việc trong lịch", plan.tasks.length],
     ["Trạng thái CP-SAT", plan.status],
-    recovery ? ["Khoảng lịch còn lại", `${recovery.remaining_horizon_days} ngày`] : ["Tổng thời gian", `${finish} ngày`],
-    ["Tổng thời gian chờ", `${queueWait} ngày`],
-    ["Thời gian giải", `${plan.solveTimeMs.toFixed(1)} ms`],
+    ["Hạn mục tiêu", deadlineDelta === null ? "Chưa đặt" : deadlineDelta < 0 ? `Trễ ${-deadlineDelta} ngày` : "Đúng hạn"],
   ];
-  const referenceLines = <>
+  const grid = <>
+    {ticks.slice(1).map(({ day }) => (
+      <span key={day} aria-hidden="true" className="absolute inset-y-0 border-l border-zinc-700/60" style={{ left: position(day) }} />
+    ))}
     {deadlineBoundary !== null && <span aria-hidden="true" className="absolute inset-y-0 z-10 border-l border-dashed border-amber-400/80"
       style={deadlineBoundary === endDay ? { right: 0 } : { left: position(deadlineBoundary) }} />}
-    {replanningDay !== null && <span aria-hidden="true" className="absolute inset-y-0 z-10 border-l border-dashed border-sky-400/80"
+    {replanningDay !== null && <span aria-hidden="true" className="absolute inset-y-0 z-10 border-l-2 border-sky-400/80"
       style={{ left: position(replanningDay) }} />}
   </>;
 
   return (
     <div className="space-y-3">
-      <dl className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+      <dl className="metric-strip">
         {metrics.map(([label, value]) => (
-          <div className="panel px-3 py-2.5" key={label}>
-            <dt className="text-xs text-zinc-400">{label}</dt>
-            <dd className="mt-1 font-mono text-sm font-semibold text-zinc-100">{value}</dd>
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd className={`text-sm font-semibold tabular-nums ${label === "Hạn mục tiêu" && deadlineDelta !== null
+              ? deadlineDelta < 0 ? "text-amber-200" : "text-emerald-300" : ""}`}>{value}</dd>
           </div>
         ))}
       </dl>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-300">
-        <span>Bắt đầu dự án: {formatDate(start)}</span>
-        {calendar.final_work_date && <span>{completionLabel}: {formatDate(calendar.final_work_date)}</span>}
-        {deadline !== null && deadlineDelta !== null && <span className="text-amber-300">
-          Hạn chót {formatDate(deadline)} · {deadlineDelta < 0 ? `Trễ ${-deadlineDelta} ngày` : "Đúng hạn"}
-        </span>}
-        {recovery?.replanning_start_date && <span className="text-sky-300">
-          Tiến độ đến hết {formatDate(recovery.progress_as_of_date)} · Lập lại lịch từ {formatDate(recovery.replanning_start_date)}
-        </span>}
-      </div>
-      {recovery?.remaining_horizon_days === 0 && <p className="text-xs text-emerald-300">Không còn công việc cần lập lịch.</p>}
-      {recovery && recovery.completed_tasks.length > 0 && <p className="text-xs text-zinc-400">Chấm xanh ghi nhận ngày hoàn thành đã xác nhận.</p>}
+      <p className="helper">
+        Bắt đầu {formatDate(start)} · Tổng số ngày chờ của các công việc: {queueWait} · Thời gian giải: {plan.solveTimeMs.toFixed(1)} ms
+        {plan.status === "FEASIBLE" && " · Có lịch khả thi, chưa chứng minh tối ưu"}
+        {recovery && ` · Khoảng lịch còn lại: ${recovery.remaining_horizon_days} ngày`}
+      </p>
+      {recovery?.remaining_horizon_days === 0 && <p className="notice success">Không còn công việc cần lập lịch.</p>}
+      <ul className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-zinc-300" aria-label="Chú giải biểu đồ">
+        <li className="flex items-center gap-1.5"><span className="gantt-bar h-2.5 w-4 rounded-sm border" aria-hidden="true" /> Công việc dự kiến</li>
+        {queueWait > 0 && <li className="flex items-center gap-1.5"><span className="gantt-wait h-2.5 w-4 rounded-sm" aria-hidden="true" /> Thời gian chờ</li>}
+        {!!recovery?.completed_tasks.length && <li className="flex items-center gap-1.5"><span className="mx-1 size-2 rotate-45 bg-emerald-400" aria-hidden="true" /> Hoàn thành thực tế</li>}
+        {deadline !== null && <li className="flex items-center gap-1.5"><span className="mx-1 h-3 border-l border-dashed border-amber-400" aria-hidden="true" /> Hết hạn ngày {formatDate(deadline)}</li>}
+        {recovery?.replanning_start_date && <li className="flex items-center gap-1.5"><span className="mx-1 h-3 border-l-2 border-sky-400" aria-hidden="true" />
+          Lập lại lịch từ {formatDate(recovery.replanning_start_date)} · Tiến độ đến hết {formatDate(recovery.progress_as_of_date)}
+        </li>}
+      </ul>
+      <p className="helper min-[760px]:hidden">Cuộn ngang để xem thêm ngày.</p>
       <div className="panel overflow-x-auto" role="region" aria-label="Biểu đồ Gantt" tabIndex={0}>
-        <div className={`${crossesYear ? "min-w-[680px]" : "min-w-[570px]"} divide-y divide-zinc-800`}>
-          <div className="gantt-row bg-[#0d0d10]">
-            <span className="px-3 py-2 text-xs font-medium text-zinc-400">Công việc · Người phụ trách</span>
-            <div className="relative h-8 border-l border-zinc-800 font-mono text-[10px] text-zinc-400">
-              {ticks.map((day) => (
-                <span key={day} className="absolute top-2 pl-1" style={{ left: position(day) }}>{formatDate(dateAtOffset(start, day), crossesYear)}</span>
+        <div className="divide-y divide-zinc-800" style={{ minWidth: width }}>
+          <div className="gantt-row gantt-axis">
+            <span className="gantt-label px-3 py-2 text-xs font-medium text-zinc-300">Công việc · Người phụ trách</span>
+            <div className="gantt-lane min-h-9 font-mono text-[11px] text-zinc-300">
+              {grid}
+              {ticks.map(({ day, label }) => label && (
+                <span key={day} className="absolute top-2 whitespace-nowrap pl-1.5" style={{ left: position(day) }}>{label}</span>
               ))}
-              {referenceLines}
             </div>
           </div>
           {recovery?.completed_tasks.map((task) => (
             <div key={task.id} className="gantt-row">
-              <div className="min-w-0 break-words px-3 py-2 text-xs">
+              <div className="gantt-label px-3 py-2 text-xs">
                 <div><span className="mr-1.5 font-mono text-zinc-400">{task.id}</span>{task.name}</div>
                 <div className="mt-0.5 text-zinc-400">{memberById.get(task.assignee_id)}</div>
                 <div className="text-emerald-300">Done · {formatDate(task.actual_finish_date)}</div>
               </div>
-              <div className="relative border-l border-zinc-800">
-                {referenceLines}
-                <span aria-hidden="true" className="absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-emerald-400"
+              <div className="gantt-lane" role="img" tabIndex={0} title={`Hoàn thành thực tế · ${formatDate(task.actual_finish_date)}`}
+                aria-label={`${task.name} · Hoàn thành thực tế ${formatDate(task.actual_finish_date)}`}>
+                {grid}
+                <span aria-hidden="true" className="absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-emerald-400"
                   style={{ left: position(task.actual_end_day_exclusive - 0.5) }} />
               </div>
             </div>
@@ -99,30 +97,27 @@ export function Schedule({ plan, members, deadline }: {
           {scheduledTasks.map((task) => {
             const plannedTask = taskById.get(task.id);
             const category = plannedTask ? taskCategory(plannedTask) : task.kanban_stage;
-            const color = CATEGORY_COLORS.get(category) ?? "#71717a";
-            const member = memberById.get(task.assignee_id ?? "");
+            const member = memberById.get(task.assignee_id ?? "") ?? "Chưa phân công";
             // Solver intervals are [start_day, end_day). Show the last occupied calendar date.
             const timing = `${formatDate(dateAtOffset(start, task.start_day))} – ${formatDate(dateAtOffset(start, task.end_day - 1))} · ${task.duration} ngày`;
             return (
               <div key={task.id} className="gantt-row">
-                <div className="min-w-0 px-3 py-2 text-xs">
-                  <div className="break-words"><span className="mr-1.5 font-mono text-zinc-400">{task.id}</span>{task.name}</div>
+                <div className="gantt-label px-3 py-2 text-xs">
+                  <div className="font-semibold"><span className="mr-1.5 font-mono font-normal text-zinc-400">{task.id}</span>{task.name}</div>
                   <div className="mt-0.5 break-words text-zinc-400">{member} · {category}</div>
                   <div className="text-zinc-400">{timing}</div>
                 </div>
-                <div className="relative border-l border-zinc-800">
-                  {ticks.slice(1).map((day) => (
-                    <span key={day} aria-hidden="true" className="absolute inset-y-0 border-l border-zinc-800/70" style={{ left: position(day) }} />
-                  ))}
-                  {referenceLines}
+                <div className="gantt-lane" role="img" tabIndex={0}
+                  aria-label={`${task.name} · ${member} · ${timing}${task.queue_wait_days ? ` · Chờ ${task.queue_wait_days} ngày` : ""}`}>
+                  {grid}
                   {task.queue_wait_days > 0 && (
                     <span className="gantt-wait absolute top-1/2 h-4 -translate-y-1/2 rounded-sm"
                       title={`Chờ ${task.queue_wait_days} ngày kể từ khi sẵn sàng`}
                       style={{ left: position(task.earliest_ready_day), width: position(task.queue_wait_days) }} />
                   )}
-                  <span className="absolute top-1/2 h-5 min-w-px -translate-y-1/2 rounded-sm border"
+                  <span className="gantt-bar absolute top-1/2 h-4 min-w-px -translate-y-1/2 rounded-sm border"
                     title={`${category} · ${member} · ${timing}\n${task.dependencies.length ? `Tiên quyết ${task.dependencies.join(", ")}` : "Không có công việc tiên quyết"}`}
-                    style={{ left: position(task.start_day), width: position(task.end_day - task.start_day), borderColor: color, backgroundColor: `${color}50` }} />
+                    style={{ left: position(task.start_day), width: position(task.end_day - task.start_day) }} />
                 </div>
               </div>
             );

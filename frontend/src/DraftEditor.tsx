@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { ListTodo, LoaderCircle, Plus } from "lucide-react";
+import { LoaderCircle, Plus, Sparkles } from "lucide-react";
 import { draftReady, draftTaskForEditor, removeDraftTask, saveDraftTask } from "./draft";
 import { TaskDialog } from "./ProjectEditor";
 import type { DraftReview, DraftTask, ProjectDraft } from "./types";
 
-function reviewLabel(review: DraftReview, missing: string) {
-  if (review === "missing") return missing;
-  if (review === "suggested") return "Gợi ý · Cần xác nhận";
-  return review === "provided" ? "Từ mô tả" : "Đã xác nhận";
+function ReviewBadge({ review, missing }: { review: DraftReview; missing: string }) {
+  const label = review === "missing" ? missing : review === "suggested" ? "Gợi ý · Cần xác nhận"
+    : review === "provided" ? "Từ mô tả" : "Đã xác nhận";
+  return <span className={`badge mt-1 ${review === "missing" || review === "suggested" ? "badge-warning" : "badge-success"}`}>{label}</span>;
 }
 
 export function DraftEditor({ draft, busy, confirming, error, replacing, onChange, onConfirm, onCancel }: {
@@ -37,22 +37,24 @@ export function DraftEditor({ draft, busy, confirming, error, replacing, onChang
   }
 
   return (
-    <section id="project-draft" aria-labelledby="draft-heading" className="panel space-y-3 border-indigo-500/40 p-3 sm:p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+    <section id="project-draft" aria-labelledby="draft-heading" className="panel proposal result-enter">
+      <div className="section-bar">
         <div className="min-w-0">
-          <h2 id="draft-heading" className="flex items-center gap-2 text-sm font-semibold">
-            <ListTodo size={15} className="text-indigo-300" aria-hidden="true" /> Bản nháp Gemini
-          </h2>
-          <p className="mt-1 break-words text-xs text-zinc-400">{draft.project_name}</p>
+          <h3 id="draft-heading" tabIndex={-1} className="section-title">
+            <Sparkles size={16} className="section-icon" aria-hidden="true" /> Bản nháp Gemini
+          </h3>
+          <p className="helper mt-1 break-words">{draft.project_name} · {draft.tasks.length} công việc</p>
         </div>
-        <button className="button" disabled={busy || draft.tasks.length >= 100} onClick={addTask}>
+        <button className="button" disabled={busy || draft.tasks.length >= 100}
+          aria-describedby={draft.tasks.length >= 100 ? "draft-limit" : undefined} onClick={addTask}>
           <Plus size={14} aria-hidden="true" /> Thêm vào bản nháp
         </button>
       </div>
-      <p className="text-xs text-zinc-300">Đây là danh sách gợi ý. Sau khi xác nhận, hãy phân công thành viên để CP-SAT tính lịch.</p>
-      <div className="overflow-x-auto rounded-md border border-zinc-800" role="region" aria-label="Bảng công việc bản nháp" tabIndex={0}>
-        <table className="w-full min-w-[32rem] table-fixed text-left text-xs">
-          <thead className="bg-zinc-900 text-zinc-400">
+      <p className="notice">Bản nháp tách riêng khỏi dự án. Sửa các mục còn thiếu và xác nhận gợi ý trước khi áp dụng.</p>
+      {draft.tasks.length >= 100 && <p id="draft-limit" className="helper">Bản nháp đã đạt giới hạn 100 công việc.</p>}
+      <div className="panel overflow-x-auto" role="region" aria-label="Bảng công việc bản nháp" tabIndex={0}>
+        <table className="data-table w-full min-w-[36rem] table-fixed text-left">
+          <thead className="table-head">
             <tr>
               <th scope="col" className="w-1/3 px-3 py-2 font-medium">Công việc</th>
               <th scope="col" className="w-1/5 px-3 py-2 font-medium">Thời lượng</th>
@@ -69,16 +71,12 @@ export function DraftEditor({ draft, busy, confirming, error, replacing, onChang
                 </th>
                 <td className="px-3 py-2">
                   {task.duration === null ? "—" : task.duration + " ngày"}
-                  <p className={"mt-0.5 " + (task.duration_review === "missing" || task.duration_review === "suggested" ? "text-amber-200" : "text-zinc-400")}>
-                    {reviewLabel(task.duration_review, "Cần bao nhiêu ngày?")}
-                  </p>
+                  <div><ReviewBadge review={task.duration_review} missing="Thiếu số ngày" /></div>
                 </td>
                 <td className="break-words px-3 py-2">
                   {task.dependencies === null ? "—" : task.dependencies.length
                     ? task.dependencies.map((id) => names.get(id) ?? id + " (không tồn tại)").join(", ") : "Không có"}
-                  <p className={"mt-0.5 " + (task.dependency_review === "missing" || task.dependency_review === "suggested" ? "text-amber-200" : "text-zinc-400")}>
-                    {reviewLabel(task.dependency_review, "Việc nào cần xong trước?")}
-                  </p>
+                  <div><ReviewBadge review={task.dependency_review} missing="Thiếu thông tin" /></div>
                 </td>
                 <td className="px-3 py-2">
                   <button className="button" aria-label={"Sửa bản nháp " + task.id} disabled={busy} onClick={() => setEditing(task)}>Sửa</button>
@@ -89,16 +87,16 @@ export function DraftEditor({ draft, busy, confirming, error, replacing, onChang
           </tbody>
         </table>
       </div>
-      {error && <p role="alert" className="notice whitespace-pre-line text-rose-300">{error}</p>}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-zinc-400">
-          {!ready ? "Điền thời lượng và xác nhận công việc tiên quyết trước khi áp dụng."
+      {error && <p role="alert" className="notice error whitespace-pre-line">{error}</p>}
+      <div className="section-bar">
+        <p id="draft-readiness" className="helper" role="status">
+          {confirming ? "Đang kiểm tra dữ liệu đã xác nhận…" : !ready ? "Điền thời lượng và xác nhận công việc tiên quyết trước khi áp dụng."
             : replacing ? "Áp dụng sẽ thay danh sách công việc và xóa lịch của danh sách cũ." : "Bản nháp đã sẵn sàng để kiểm tra và áp dụng."}
         </p>
         <div className="flex flex-wrap gap-2">
           <button className="button" disabled={busy} onClick={onCancel}>Bỏ bản nháp</button>
-          <button className="button primary" disabled={busy || !ready} onClick={onConfirm}>
-            {confirming && <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />}
+          <button className="button primary" disabled={busy || !ready} onClick={onConfirm} aria-describedby="draft-readiness">
+            {confirming && <LoaderCircle size={14} className="busy-icon" aria-hidden="true" />}
             {confirming ? "Đang kiểm tra…" : replacing ? "Xác nhận và thay công việc" : "Xác nhận bản nháp"}
           </button>
         </div>
