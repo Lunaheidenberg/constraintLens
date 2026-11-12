@@ -2,7 +2,7 @@
 
 ## Current implementation
 
-React and Vite provide the scheduling interface. `frontend/src/main.tsx` mounts `App.tsx`, which owns one editable `SchedulingIR`, a project calendar, and a progress draft. `ProjectEditor.tsx` provides the member list, task table, task dialog, and Kanban board. Presets and Gemini responses load as editable drafts; the user supplies the project start date before solving. Members have stable IDs, and users assign tasks manually. Removing a referenced member requires clearing or changing the affected assignments first.
+React and Vite provide the scheduling interface. `frontend/src/main.tsx` mounts `App.tsx`, which owns one editable `SchedulingIR`, a project calendar, and a progress draft. `ProjectEditor.tsx` provides the member list, task table, task dialog, and Kanban board. Presets load as editable projects. Members have stable IDs, and users assign tasks manually. Removing a referenced member requires clearing or changing the affected assignments first.
 
 The task table, Kanban board, and `ProgressEditor.tsx` read the same task statuses. Moving a task to **Done** does not assign an actual date. `Schedule.tsx` renders planned intervals in calendar dates and confirmed completions as points with no inferred start or historical duration. The first accepted schedule is the baseline. `plans.ts` keeps the baseline, accepted schedule, and current proposal separate; only explicit acceptance replaces the accepted schedule. Input edits cancel in-flight requests and discard proposals. Project start and structural edits mark the accepted plan outdated; status edits leave its intervals intact, and deadline edits re-evaluate its due date without solving again. Accepted completion records are carried forward and locked for the current project session.
 
@@ -11,7 +11,9 @@ The UI sends HTTP/JSON requests to FastAPI. `App.tsx` currently uses the absolut
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/presets` | Returns built-in scheduling scenarios from `api.py`. |
-| `POST /api/parse` | Uses `parser.py` and Gemini to extract a scheduling draft from natural-language text. Requires a Gemini API key. |
+| `POST /api/parse/draft` | Extracts a reviewable task draft from Vietnamese or English text. Reads the Gemini API key on the server. |
+| `POST /api/parse/confirm` | Converts a reviewed draft into an unassigned scheduling IR using Pydantic and `validate_ir`. Returns HTTP 422 for incomplete or invalid drafts. |
+| `POST /api/parse` | Retains the legacy Gemini-to-IR contract for older callers. |
 | `POST /api/validate` | Accepts a scheduling IR and returns a validity flag and business-rule errors. React sets `require_assignments=true` to validate member assignments, durations, and dependencies before solving. |
 | `POST /api/solve` | Accepts scheduling input with optional time limit and `calendar`. React requests `scheduling_mode: "member"` and reviews the result as an initial proposal. A calendar request also returns project finish dates and deadline status. Legacy numeric requests and what-if responses still work. |
 | `POST /api/reschedule/validate` | Validates the member-assigned IR, calendar, and progress snapshot without solving. |
@@ -32,6 +34,10 @@ T5 previews the accepted plan against a valid rescheduling proposal. Acceptance 
 `comparison.ts` compares snapshot tasks by ID and computes calendar-day differences from the stored exclusive finish boundaries. The UI shows the last occupied day for planned work and the last confirmed completion for an all-Done plan. Both finishes use the revised snapshot's inclusive target so the change in lateness uses the same deadline. Remaining horizon is shown separately. Moved and unchanged counts require two comparable planned intervals. Confirmed completion uses the recovery records, and a duration change can accompany a move. The comparison Gantt aligns both sets of intervals on one calendar axis and shows actual completions as points.
 
 The React/FastAPI workflow keeps the editable project and the comparison snapshots in memory. The repository retains the legacy Streamlit entry point in `app.py`.
+
+T6 keeps Gemini extraction in a separate in-memory `ProjectDraft` while the active project remains editable. Duration and prerequisites each carry a review state. Explicitly sourced fields are marked `provided` when the parser can match a supporting quote in the description. `suggested` requires review, and `missing` has a null value. An empty prerequisites array records an explicit choice of no prerequisites. The shared Task Editor supports corrections and marks edited or accepted values `confirmed`. Applying a validated draft preserves the member roster and calendar settings, replaces the task list with unassigned To Do tasks, and clears plans and progress tied to the previous list.
+
+The React extraction path rejects malformed or unexpected Gemini output as a whole. Generation errors preserve the description, any draft edits, and the active project. The parser makes at most one fallback call for selected provider errors and returns user-facing messages without provider exception details. Draft review, presets, manual entry, and scheduling operate without Gemini.
 
 Local checks include `uv run --locked python -m unittest discover -s tests`, the executable scenarios in `validator.py` and `solver.py`, and the frontend TypeScript check, build, and `npm test` (Node 24). The direct parser demo and `diagnose_api.py` use the live Gemini API and are outside this baseline.
 

@@ -1,12 +1,14 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { CalendarDays, CircleHelp, LayoutGrid, ListTodo, LoaderCircle, Play } from "lucide-react";
 import { isCalendarDate } from "./calendar";
+import { draftReady } from "./draft";
+import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
 import { hasSolution, initialPlans, planReducer } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
-import type { PresetsMap, ProjectCalendar, ProgressSnapshot, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse } from "./types";
+import type { ParseRequest, PresetsMap, ProjectCalendar, ProjectDraft, ProgressSnapshot, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse } from "./types";
 
 const API_BASE = "http://localhost:8000";
 
@@ -123,9 +125,10 @@ export default function App() {
   const [presetRequest, setPresetRequest] = useState(0);
   const [selectedPreset, setSelectedPreset] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [isParsing, setIsParsing] = useState(false);
+  const [draftPhase, setDraftPhase] = useState<"generating" | "confirming" | null>(null);
   const [parseError, setParseError] = useState("");
-  const [pendingDraft, setPendingDraft] = useState<SchedulingIR | null>(null);
+  const [draftError, setDraftError] = useState("");
+  const [pendingDraft, setPendingDraft] = useState<ProjectDraft | null>(null);
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [calendar, setCalendar] = useState(EMPTY_CALENDAR);
   const [asOf, setAsOf] = useState("");
@@ -188,25 +191,23 @@ export default function App() {
     setCalendar(next);
   }
 
-  function loadProject(draft: SchedulingIR, preset = "") {
+  function loadProject(next: SchedulingIR, preset?: string) {
     editVersion.current += 1;
     cancelScheduling();
     setProject((current) => ({
-      ir: draft,
+      ir: preset === undefined ? { ...next, members: current.ir.members } : next,
       instance: current.instance + 1,
       scheduleRevision: current.scheduleRevision + 1,
       dirty: false,
     }));
-    setSelectedPreset(preset);
+    setSelectedPreset(preset ?? "");
     dispatchPlan({ type: "reset" });
     setFeedback(null);
     setProgressFeedback(null);
     setEditing(null);
-    setCalendar(EMPTY_CALENDAR);
+    if (preset !== undefined) setCalendar(EMPTY_CALENDAR);
     setAsOf("");
     setEntries(new Map());
-    setPendingDraft(null);
-    setParseError("");
   }
 
   function confirmReplace() {
@@ -214,19 +215,40 @@ export default function App() {
   }
 
   async function parseProject() {
-    if (isParsing || !prompt.trim() || !confirmReplace()) return;
-    const version = editVersion.current;
-    setIsParsing(true);
+    if (draftPhase || !prompt.trim()) return;
+    setDraftPhase("generating");
     setParseError("");
-    setPendingDraft(null);
     try {
-      const draft = await post<SchedulingIR>("/api/parse", { prompt: prompt.trim() });
-      if (editVersion.current === version) loadProject(draft);
-      else setPendingDraft(draft);
+      const payload: ParseRequest = { prompt: prompt.trim() };
+      const draft = await post<ProjectDraft>("/api/parse/draft", payload);
+      setPendingDraft(draft);
+      setDraftError("");
     } catch (error) {
       setParseError(errorMessage(error));
     } finally {
-      setIsParsing(false);
+      setDraftPhase(null);
+    }
+  }
+
+  async function confirmDraft() {
+    if (draftPhase || !pendingDraft || !draftReady(pendingDraft)) return;
+    const version = editVersion.current;
+    setDraftPhase("confirming");
+    setDraftError("");
+    try {
+      const confirmed = await post<SchedulingIR>("/api/parse/confirm", pendingDraft);
+      if (editVersion.current !== version) {
+        setDraftError("Dự án đã thay đổi trong lúc kiểm tra. Hãy xem lại rồi xác nhận bản nháp lần nữa.");
+        return;
+      }
+      loadProject(confirmed);
+      setPendingDraft(null);
+      setParseError("");
+      setFeedback({ message: "Đã áp dụng bản nháp. Chọn người phụ trách cho từng công việc.", errors: [] });
+    } catch (error) {
+      setDraftError(errorMessage(error));
+    } finally {
+      setDraftPhase(null);
     }
   }
 
@@ -454,7 +476,8 @@ export default function App() {
             )}
             <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void parseProject(); }}>
               <label className="field">Mô tả dự án
-                <textarea className="control min-h-20 w-full resize-y leading-relaxed" value={prompt}
+                <textarea className="control min-h-20 w-full resize-y leading-relaxed" value={prompt} maxLength={12000}
+                  aria-describedby="description-help"
                   placeholder="Ví dụ: Thiết kế giao diện trong 3 ngày, sau đó lập trình chức năng đăng nhập."
                   onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
                     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -463,18 +486,18 @@ export default function App() {
                     }
                   }} />
               </label>
-              <button className="button w-full" disabled={isParsing || !prompt.trim()}>
-                {isParsing && <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />}
-                {isParsing ? "Đang tạo bản nháp…" : "Tạo bản nháp với Gemini"}
+              <p id="description-help" className="text-xs text-zinc-400">Viết bằng tiếng Việt hoặc tiếng Anh. Nếu biết, hãy ghi số ngày và việc cần hoàn thành trước.</p>
+              <button className="button w-full" disabled={!!draftPhase || !prompt.trim()}>
+                {draftPhase === "generating" && <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />}
+                {draftPhase === "generating" ? "Đang tạo bản nháp…" : pendingDraft ? "Tạo lại bản nháp với Gemini" : "Tạo bản nháp với Gemini"}
               </button>
-              {parseError && <p className="notice text-rose-300" role="alert">{parseError}</p>}
-              {pendingDraft && (
+              {parseError && (
                 <div className="notice">
-                  <p>Bản nháp đã sẵn sàng. Dự án hiện tại đã thay đổi trong lúc Gemini xử lý.</p>
-                  <button type="button" className="button mt-2"
-                    onClick={() => { if (confirmReplace()) loadProject(pendingDraft); }}>Nạp bản nháp</button>
+                  <p className="text-rose-300" role="alert">{parseError}</p>
+                  <button type="button" className="button mt-2" onClick={() => openTaskEditor("new")}>Thêm công việc thủ công</button>
                 </div>
               )}
+              {pendingDraft && <a href="#project-draft" className="block text-xs text-indigo-300 hover:underline">Xem bản nháp</a>}
             </form>
           </div>
 
@@ -548,6 +571,11 @@ export default function App() {
           <p className="mt-1 text-xs text-zinc-400">{ir.tasks.length} công việc · {members.length} thành viên</p>
         </header>
         <div className="space-y-6 p-4 sm:p-6">
+          {pendingDraft && (
+            <DraftEditor draft={pendingDraft} busy={!!draftPhase} confirming={draftPhase === "confirming"} error={draftError}
+              replacing={ir.tasks.length > 0} onChange={(draft) => { setPendingDraft(draft); setDraftError(""); }}
+              onConfirm={() => void confirmDraft()} onCancel={() => { setPendingDraft(null); setDraftError(""); }} />
+          )}
           <section aria-labelledby="tasks-heading">
             <SectionTitle id="tasks-heading" icon={ListTodo}>Công việc</SectionTitle>
             <TaskTable tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor} onAdd={() => openTaskEditor("new")}

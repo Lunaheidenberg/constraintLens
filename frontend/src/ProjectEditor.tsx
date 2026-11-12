@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { GripVertical, Plus, UserRound, X } from "lucide-react";
+import type { EditableTask } from "./draft";
 import type { KanbanStatus, ProjectMember, Task } from "./types";
 
 const STATUSES: KanbanStatus[] = ["To Do", "Doing", "Done"];
@@ -10,7 +11,7 @@ const STATUS_COLORS: Record<KanbanStatus, string> = {
   Done: "border-emerald-400 bg-emerald-400",
 };
 
-export function taskCategory(task: Task) {
+export function taskCategory(task: Pick<Task, "category" | "kanban_stage">) {
   return task.category ?? task.kanban_stage;
 }
 
@@ -94,7 +95,7 @@ export function Members({ members, tasks, onAdd, onRename, onRemove }: MembersPr
 
 function AssigneeSelect({ members, task, onChange, disabled }: {
   members: ProjectMember[];
-  task: Task;
+  task: Pick<Task, "id" | "assignee_id">;
   onChange: (id: string | null) => void;
   disabled?: boolean;
 }) {
@@ -111,7 +112,7 @@ function AssigneeSelect({ members, task, onChange, disabled }: {
   );
 }
 
-function StatusSelect({ task, onChange, disabled }: { task: Task; onChange: (status: KanbanStatus) => void; disabled?: boolean }) {
+function StatusSelect({ task, onChange, disabled }: { task: Pick<Task, "id" | "status">; onChange: (status: KanbanStatus) => void; disabled?: boolean }) {
   return (
     <select className="control w-full" aria-label={`Trạng thái ${task.id}`} value={task.status ?? "To Do"} disabled={disabled}
       onChange={(event) => onChange(event.target.value as KanbanStatus)}>
@@ -276,17 +277,20 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
   );
 }
 
-export function TaskDialog({ task, tasks, members, onSave, onRemove, onClose }: {
-  task: Task;
-  tasks: Task[];
-  members: ProjectMember[];
-  onSave: (updated: Task) => void;
+export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], draftReview, onSave, onRemove, onClose }: {
+  task: T;
+  tasks: T[];
+  members?: ProjectMember[];
+  draftReview?: { duration: boolean; dependencies: boolean };
+  onSave: (updated: T, review: { duration: boolean; dependencies: boolean }) => void;
   onRemove?: () => void;
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [fields, setFields] = useState(task);
-  const [duration, setDuration] = useState(String(task.duration));
+  const [duration, setDuration] = useState(task.duration === null ? "" : String(task.duration));
+  const [durationReviewed, setDurationReviewed] = useState(false);
+  const [dependenciesReviewed, setDependenciesReviewed] = useState(false);
   const [error, setError] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
   const dependencies = new Map(tasks.filter((item) => item !== task).map((item) => [item.id, item.name]));
@@ -304,7 +308,7 @@ export function TaskDialog({ task, tasks, members, onSave, onRemove, onClose }: 
     const id = fields.id.trim();
     const name = fields.name.trim();
     const category = taskCategory(fields).trim();
-    const days = Number(duration);
+    const days = draftReview && !duration.trim() ? null : Number(duration);
     if (!id || !name || !category) {
       setError("Nhập mã, tên và nhóm công việc.");
       return;
@@ -313,11 +317,15 @@ export function TaskDialog({ task, tasks, members, onSave, onRemove, onClose }: 
       setError(`Mã ${id} đã được sử dụng. Hãy chọn mã khác.`);
       return;
     }
-    if (!Number.isSafeInteger(days) || days < 1) {
+    if (draftReview && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(id)) {
+      setError("Mã công việc dùng tối đa 40 ký tự gồm chữ cái, số, gạch dưới hoặc gạch ngang và bắt đầu bằng chữ hoặc số.");
+      return;
+    }
+    if (days !== null && (!Number.isSafeInteger(days) || days < 1)) {
       setError("Thời lượng phải là số nguyên dương tính theo ngày.");
       return;
     }
-    onSave({ ...fields, id, name, category, duration: days });
+    onSave({ ...fields, id, name, category, duration: days }, { duration: durationReviewed, dependencies: dependenciesReviewed });
     dialog.current?.close();
   }
 
@@ -330,27 +338,36 @@ export function TaskDialog({ task, tasks, members, onSave, onRemove, onClose }: 
         </header>
         <div className="space-y-3 p-4">
           <label className="field">Tên công việc
-            <input autoFocus required className="control w-full" value={fields.name} onChange={(event) => setFields({ ...fields, name: event.target.value })} />
+            <input autoFocus required maxLength={draftReview ? 180 : undefined} className="control w-full" value={fields.name}
+              onChange={(event) => setFields({ ...fields, name: event.target.value })} />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="field">Mã công việc
               <input required className="control w-full font-mono" value={fields.id} onChange={(event) => setFields({ ...fields, id: event.target.value })} />
             </label>
             <label className="field">Thời lượng (ngày)
-              <input type="number" required min="1" step="1" className="control w-full" value={duration} onChange={(event) => setDuration(event.target.value)} />
+              <input type="number" required={!draftReview} min="1" step="1" className="control w-full" value={duration}
+                onChange={(event) => setDuration(event.target.value)} />
             </label>
           </div>
           <label className="field">Nhóm công việc
-            <input required className="control w-full" value={taskCategory(fields)} onChange={(event) => setFields({ ...fields, category: event.target.value })} />
+            <input required maxLength={draftReview ? 180 : undefined} className="control w-full" value={taskCategory(fields)}
+              onChange={(event) => setFields({ ...fields, category: event.target.value })} />
           </label>
-          <div className="grid gap-3 min-[400px]:grid-cols-2">
+          {draftReview?.duration && (
+            <label className="flex items-center gap-2 text-xs text-amber-200">
+              <input type="checkbox" checked={durationReviewed} onChange={(event) => setDurationReviewed(event.target.checked)} />
+              Xác nhận thời lượng này
+            </label>
+          )}
+          {!draftReview && <div className="grid gap-3 min-[400px]:grid-cols-2">
             <label className="field">Người phụ trách
               <AssigneeSelect members={members} task={fields} onChange={(id) => setFields({ ...fields, assignee_id: id })} />
             </label>
             <label className="field">Trạng thái
               <StatusSelect task={fields} onChange={(status) => setFields({ ...fields, status })} />
             </label>
-          </div>
+          </div>}
           <fieldset>
             <legend className="text-xs font-medium text-zinc-300">Công việc tiên quyết</legend>
             {dependencyOptions.size === 0 ? <p className="mt-1 text-xs text-zinc-400">Chưa có công việc khác.</p> : (
@@ -364,6 +381,13 @@ export function TaskDialog({ task, tasks, members, onSave, onRemove, onClose }: 
                   </label>
                 ))}
               </div>
+            )}
+            {draftReview?.dependencies && (
+              <label className="mt-2 flex items-start gap-2 text-xs text-amber-200">
+                <input type="checkbox" className="mt-0.5" checked={dependenciesReviewed}
+                  onChange={(event) => setDependenciesReviewed(event.target.checked)} />
+                {fields.dependencies.length ? "Xác nhận các công việc tiên quyết đã chọn" : "Xác nhận không có công việc tiên quyết"}
+              </label>
             )}
           </fieldset>
           {error && <p role="alert" className="notice text-rose-300">{error}</p>}

@@ -203,11 +203,27 @@ export interface RescheduleResult extends CalendarFinish {
 }
 
 /**
- * Payload yêu cầu phân tích ngôn ngữ tự nhiên POST /api/parse.
+ * Payload yêu cầu tạo bản nháp POST /api/parse/draft.
  */
 export interface ParseRequest {
   prompt: string;
-  api_key?: string;
+}
+
+export type DraftReview = "provided" | "suggested" | "missing" | "confirmed";
+
+export interface DraftTask {
+  id: string;
+  name: string;
+  category: string;
+  duration: number | null;
+  dependencies: string[] | null;
+  duration_review: DraftReview;
+  dependency_review: DraftReview;
+}
+
+export interface ProjectDraft {
+  project_name: string;
+  tasks: DraftTask[];
 }
 
 /**

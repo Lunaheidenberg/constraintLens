@@ -4,7 +4,8 @@ api.py
 FastAPI Backend cho ConstraintLens - AI-Powered Kanban Flow & Bottleneck Simulator.
 Cung cấp các API:
   - GET  /api/presets  : Danh sách các kịch bản mẫu (DEMO_SCENARIOS)
-  - POST /api/parse    : Phân tích mô tả tự nhiên thành SchedulingIR bằng Gemini
+  - POST /api/parse    : Phân tích mô tả thành SchedulingIR cho các client cũ
+  - POST /api/parse/draft, /api/parse/confirm : Tạo và xác nhận bản nháp Gemini
   - POST /api/validate : Kiểm tra tính toàn vẹn và chu trình đồ thị (DAG Cycle)
   - POST /api/solve    : Giải RCPSP bằng CP-SAT và phân tích What-If Counterfactual
   - POST /api/reschedule : Lập lại lịch theo tiến độ cuối ngày đã xác nhận
@@ -19,8 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from models import KanbanConfig, ProgressSnapshot, SchedulingIR, Task
-from parser import parse_kanban_prompt
+from parser import GeminiDraftError, parse_kanban_prompt, parse_project_draft
 from project_calendar import CalendarFinish, ProjectCalendar, calendar_finish, calendar_range_errors
+from project_draft import ProjectDraft
 from solver import RescheduleResult, ScheduleResult, SchedulingMode, reschedule_project, solve_schedule
 from validator import validate_ir, validate_progress
 
@@ -50,7 +52,7 @@ def _get_gemini_api_key(provided_key: Optional[str] = None) -> str:
     if provided_key and provided_key.strip():
         return provided_key.strip()
 
-    key = os.getenv("GEMINI_API_KEY", "")
+    key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         env_path = Path(".env")
         if env_path.exists():
@@ -150,6 +152,10 @@ class ParseRequest(BaseModel):
     api_key: Optional[str] = Field(default=None, description="API Key Gemini tùy chọn.")
 
 
+class DraftRequest(BaseModel):
+    prompt: str
+
+
 class ValidateResponse(BaseModel):
     valid: bool = Field(description="True nếu không có lỗi, False nếu có lỗi logic hoặc DAG cycle.")
     errors: list[str] = Field(description="Danh sách thông báo lỗi bằng tiếng Việt.")
@@ -233,16 +239,33 @@ def parse_prompt(payload: ParseRequest):
     try:
         ir = parse_kanban_prompt(user_text=payload.prompt, api_key=api_key)
         return ir
-    except ValidationError as ve:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Cấu trúc dữ liệu AI trả về không khớp SchedulingIR: {ve}",
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Lỗi khi gọi Gemini API phân tích mô tả: {str(exc)}",
-        )
+    except GeminiDraftError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="Dữ liệu Gemini trả về không khớp SchedulingIR.") from None
+    except Exception:
+        raise HTTPException(status_code=500, detail="Không đọc được phản hồi từ Gemini.") from None
+
+
+@app.post("/api/parse/draft", response_model=ProjectDraft)
+def generate_draft(payload: DraftRequest):
+    prompt = payload.prompt.strip()
+    if not prompt or len(prompt) > 12_000:
+        raise HTTPException(status_code=400, detail="Nhập mô tả dự án từ 1 đến 12.000 ký tự.")
+    try:
+        return parse_project_draft(prompt, _get_gemini_api_key())
+    except GeminiDraftError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+    except OSError:
+        raise HTTPException(status_code=503, detail="Không đọc được cấu hình Gemini trên máy chủ.") from None
+
+
+@app.post("/api/parse/confirm", response_model=SchedulingIR)
+def confirm_draft(draft: ProjectDraft):
+    ir, errors = draft.confirm()
+    if ir is None:
+        raise HTTPException(status_code=422, detail="\n".join(errors))
+    return ir
 
 
 @app.post("/api/validate", response_model=ValidateResponse)
