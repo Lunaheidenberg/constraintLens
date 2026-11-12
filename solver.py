@@ -12,13 +12,15 @@ Quy tắc kiến trúc (architecture.md):
 
 import time
 from collections import defaultdict
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
 from ortools.sat.python import cp_model
 
-from models import SchedulingIR, KanbanConfig, Task
-from validator import validate_ir
+from models import SchedulingIR, KanbanConfig, ProgressSnapshot, Task
+from project_calendar import CalendarFinish, ProjectCalendar, calendar_finish, calendar_range_errors, date_at_offset, end_of_day_boundary
+from validator import validate_ir, validate_progress
 
 
 SchedulingMode = Literal["legacy", "member"]
@@ -40,7 +42,7 @@ class ScheduledTask(BaseModel):
     assignee_id: str | None = None
     earliest_ready_day: int = Field(
         description=(
-            "Ngày sớm nhất khi mọi dependencies đã hoàn thành; bằng 0 nếu không có dependencies."
+            "Ngày sớm nhất sau mốc lập lịch và khi mọi dependencies đã hoàn thành."
         )
     )
     queue_wait_days: int = Field(
@@ -96,6 +98,33 @@ class ScheduleResult(BaseModel):
     )
 
 
+class CalendarScheduledTask(ScheduledTask):
+    start_date: date
+    final_work_date: date
+    end_date_exclusive: date
+
+
+class CompletedTask(BaseModel):
+    id: str
+    name: str
+    assignee_id: str
+    actual_finish_date: date
+    actual_end_day_exclusive: int
+    actual_end_date_exclusive: date
+
+
+class RescheduleResult(CalendarFinish):
+    status: str
+    progress_as_of_date: date
+    replanning_start_day: int | None = None
+    replanning_start_date: date | None = None
+    remaining_horizon_days: int | None = None
+    solve_time_ms: float = 0.0
+    scheduled_tasks: list[CalendarScheduledTask] = Field(default_factory=list)
+    completed_tasks: list[CompletedTask] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 # =============================================================================
 # HÀM GIẢI CHÍNH
 # =============================================================================
@@ -131,19 +160,32 @@ def solve_schedule(
     # =========================================================================
     errors = validate_ir(ir, require_assignments=use_members)
     if errors:
-        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
-        return ScheduleResult(
-            scheduling_mode=scheduling_mode,
-            status="INVALID_INPUT",
-            makespan=0,
-            solve_time_ms=round(elapsed_ms, 3),
-            scheduled_tasks=[],
-            stage_metrics=[],
-            bottleneck_stages=[],
-            errors=errors,
-        )
+        return _unscheduled(scheduling_mode, "INVALID_INPUT", t_start, errors)
 
-    tasks: list[Task] = ir.tasks
+    return _solve_intervals(ir, ir.tasks, {task.id: task.duration for task in ir.tasks}, scheduling_mode,
+                            time_limit_sec, t_start)
+
+
+def _unscheduled(mode: SchedulingMode, status: str, t_start: float, errors: list[str]) -> ScheduleResult:
+    return ScheduleResult(scheduling_mode=mode, status=status, makespan=0,
+                          solve_time_ms=round((time.perf_counter() - t_start) * 1000, 3),
+                          scheduled_tasks=[], stage_metrics=[], bottleneck_stages=[], errors=errors)
+
+
+def _solve_intervals(
+    ir: SchedulingIR,
+    tasks: list[Task],
+    durations: dict[str, int],
+    scheduling_mode: SchedulingMode,
+    time_limit_sec: float,
+    t_start: float,
+    *,
+    boundary: int = 0,
+    completed_ends: dict[str, int] | None = None,
+) -> ScheduleResult:
+    """Solve validated work intervals; historical ends are constants, never intervals."""
+    use_members = scheduling_mode == "member"
+    completed_ends = completed_ends or {}
 
     # =========================================================================
     # BƯỚC 2: KHỞI TẠO MODEL CP-SAT VÀ BIẾN THỜI GIAN
@@ -151,7 +193,7 @@ def solve_schedule(
     model = cp_model.CpModel()
 
     # horizon = tổng tất cả duration → giới hạn trên an toàn cho mọi biến thời gian
-    horizon: int = sum(t.duration for t in tasks)
+    horizon = boundary + sum(durations.values())
 
     # Tạo biến start, end, interval cho từng task
     start_vars: dict[str, cp_model.IntVar] = {}
@@ -159,9 +201,9 @@ def solve_schedule(
     interval_vars: dict[str, cp_model.IntervalVar] = {}
 
     for task in tasks:
-        s = model.NewIntVar(0, horizon, f"start_{task.id}")
-        e = model.NewIntVar(0, horizon, f"end_{task.id}")
-        iv = model.NewIntervalVar(s, task.duration, e, f"interval_{task.id}")
+        s = model.NewIntVar(boundary, horizon, f"start_{task.id}")
+        e = model.NewIntVar(boundary, horizon, f"end_{task.id}")
+        iv = model.NewIntervalVar(s, durations[task.id], e, f"interval_{task.id}")
         start_vars[task.id] = s
         end_vars[task.id] = e
         interval_vars[task.id] = iv
@@ -172,7 +214,8 @@ def solve_schedule(
     # =========================================================================
     for task in tasks:
         for dep_id in task.dependencies:
-            model.Add(start_vars[task.id] >= end_vars[dep_id])
+            prerequisite_end = completed_ends[dep_id] if dep_id in completed_ends else end_vars[dep_id]
+            model.Add(start_vars[task.id] >= prerequisite_end)
 
     if use_members:
         # Mỗi thành viên chỉ làm một task tại một thời điểm.
@@ -199,11 +242,11 @@ def solve_schedule(
     # makespan đều "nặng hơn" tổng tất cả start_vars có thể cộng lại, nên
     # makespan luôn được tối ưu trước (lexicographic ordering).
     # =========================================================================
-    makespan_var = model.NewIntVar(0, horizon, "makespan")
+    makespan_var = model.NewIntVar(boundary, horizon, "makespan")
     all_end_vars = [end_vars[t.id] for t in tasks]
     model.AddMaxEquality(makespan_var, all_end_vars)
 
-    weight = horizon * len(tasks) + 1
+    weight = (horizon - boundary) * len(tasks) + 1
     all_start_vars = [start_vars[t.id] for t in tasks]
     model.Minimize(makespan_var * weight + sum(all_start_vars))
 
@@ -224,16 +267,7 @@ def solve_schedule(
         error = f"CP-SAT không tìm được nghiệm khả thi. Trạng thái: {status_str}"
         if status_code == cp_model.UNKNOWN:
             error = "CP-SAT chưa tìm được lịch khả thi hoặc chứng minh vô nghiệm. Hãy thử tăng thời gian giải."
-        return ScheduleResult(
-            scheduling_mode=scheduling_mode,
-            status=status_str,
-            makespan=0,
-            solve_time_ms=round(elapsed_ms, 3),
-            scheduled_tasks=[],
-            stage_metrics=[],
-            bottleneck_stages=[],
-            errors=[error],
-        )
+        return _unscheduled(scheduling_mode, status_str, t_start, [error])
 
     # =========================================================================
     # BƯỚC 5: TRÍCH XUẤT GIÁ TRỊ BIẾN VÀ TÍNH TOÁN CHỈ SỐ
@@ -242,17 +276,14 @@ def solve_schedule(
 
     # Lấy start_day, end_day cho mỗi task
     task_start: dict[str, int] = {t.id: solver.Value(start_vars[t.id]) for t in tasks}
-    task_end: dict[str, int] = {t.id: solver.Value(end_vars[t.id]) for t in tasks}
+    task_end = {**completed_ends, **{t.id: solver.Value(end_vars[t.id]) for t in tasks}}
 
     # Tính earliest_ready_day và queue_wait_days cho từng task
     scheduled_tasks: list[ScheduledTask] = []
     for task in tasks:
-        # earliest_ready_day = max(end_day) của tất cả dependencies;
-        # bằng 0 nếu không có dependencies.
-        if task.dependencies:
-            earliest_ready_day = max(task_end[dep_id] for dep_id in task.dependencies)
-        else:
-            earliest_ready_day = 0
+        # Ngày sẵn sàng không được trước mốc lập lịch hoặc ngày kết thúc tiên quyết.
+        dependency_end = max((task_end[dep_id] for dep_id in task.dependencies), default=boundary)
+        earliest_ready_day = max(boundary, dependency_end)
 
         start_day = task_start[task.id]
         end_day = task_end[task.id]
@@ -263,7 +294,7 @@ def solve_schedule(
                 id=task.id,
                 name=task.name,
                 kanban_stage=task.kanban_stage,
-                duration=task.duration,
+                duration=durations[task.id],
                 dependencies=list(task.dependencies),
                 start_day=start_day,
                 end_day=end_day,
@@ -283,6 +314,58 @@ def solve_schedule(
         stage_metrics=stage_metrics,
         bottleneck_stages=[metric.stage_name for metric in stage_metrics if metric.is_bottleneck],
         errors=[],
+    )
+
+
+def reschedule_project(
+    ir: SchedulingIR, calendar: ProjectCalendar, snapshot: ProgressSnapshot, time_limit_sec: float = 10.0,
+) -> RescheduleResult:
+    t_start = time.perf_counter()
+    errors = validate_progress(ir, calendar, snapshot)
+    as_of = snapshot.progress_as_of_date
+    if errors:
+        return RescheduleResult(**calendar.model_dump(), progress_as_of_date=as_of, status="INVALID_INPUT", errors=errors)
+
+    start = calendar.project_start_date
+    boundary = end_of_day_boundary(start, as_of)
+    completed: list[CompletedTask] = []
+    remaining: list[Task] = []
+    durations: dict[str, int] = {}
+    for task in ir.tasks:
+        if task.status == "Done":
+            finish = snapshot.task_progress[task.id].actual_finish_date
+            assert finish is not None and task.assignee_id is not None  # Đã kiểm tra tiến độ.
+            end = end_of_day_boundary(start, finish)
+            completed.append(CompletedTask(id=task.id, name=task.name, assignee_id=task.assignee_id,
+                                           actual_finish_date=finish, actual_end_day_exclusive=end,
+                                           actual_end_date_exclusive=date_at_offset(start, end)))
+        else:
+            remaining.append(task)
+            days = snapshot.task_progress[task.id].remaining_duration if task.status == "Doing" else task.duration
+            assert days is not None  # Đã kiểm tra tiến độ.
+            durations[task.id] = days
+
+    completed_ends = {task.id: task.actual_end_day_exclusive for task in completed}
+    context = dict(progress_as_of_date=as_of, replanning_start_day=boundary,
+                   replanning_start_date=date_at_offset(start, boundary), completed_tasks=completed)
+    if not remaining:
+        # Không có biến quyết định; thời điểm kết thúc là dữ kiện lịch sử đã xác nhận.
+        return RescheduleResult(**calendar_finish(calendar, max(completed_ends.values())).model_dump(),
+                                **context, status="OPTIMAL", remaining_horizon_days=0)
+
+    result = _solve_intervals(ir, remaining, durations, "member", time_limit_sec, t_start,
+                              boundary=boundary, completed_ends=completed_ends)
+    finish_day = result.makespan if result.status in ("OPTIMAL", "FEASIBLE") else None
+    return RescheduleResult(
+        **calendar_finish(calendar, finish_day).model_dump(), **context,
+        status=result.status, solve_time_ms=result.solve_time_ms, errors=result.errors,
+        remaining_horizon_days=None if finish_day is None else finish_day - boundary,
+        scheduled_tasks=[CalendarScheduledTask(
+            **task.model_dump(),
+            start_date=date_at_offset(start, task.start_day),
+            final_work_date=date_at_offset(start, task.end_day - 1),
+            end_date_exclusive=date_at_offset(start, task.end_day),
+        ) for task in result.scheduled_tasks],
     )
 
 

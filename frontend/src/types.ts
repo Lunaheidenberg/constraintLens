@@ -83,7 +83,7 @@ export interface ScheduledTask {
   start_day: number;
   end_day: number;
   assignee_id: string | null;
-  /** Ngày sớm nhất khi mọi dependencies đã hoàn thành (0 nếu không có) */
+  /** Ngày sớm nhất sau mốc lập lịch và khi mọi dependencies đã hoàn thành */
   earliest_ready_day: number;
   /** start_day - earliest_ready_day: số ngày thẻ phải chờ do nghẽn WIP hoặc thiếu người */
   queue_wait_days: number;
@@ -143,6 +143,7 @@ export interface ScheduleResult {
 export interface SolveResponse {
   result: ScheduleResult;
   rescue_suggestions: string[];
+  calendar: CalendarFinish | null;
 }
 
 /**
@@ -152,8 +153,54 @@ export interface SolveResponse {
 export type SolveRequest = ({ ir: SchedulingIR } | SchedulingIR) & {
   scheduling_mode?: SchedulingMode | null;
   target_deadline?: number | null;
+  calendar?: ProjectCalendar;
   time_limit_sec?: number;
 };
+
+export interface ProjectCalendar {
+  project_start_date: string;
+  target_deadline_date: string | null;
+}
+
+export interface CalendarFinish extends ProjectCalendar {
+  project_finish_day_exclusive: number | null;
+  project_finish_date_exclusive: string | null;
+  final_work_date: string | null;
+  deadline_status: 'on_time' | 'late' | null;
+  days_late: number | null;
+}
+
+export interface ProgressSnapshot {
+  progress_as_of_date: string;
+  task_progress: Record<string, { remaining_duration: number } | { actual_finish_date: string }>;
+}
+
+export interface RescheduleRequest {
+  ir: SchedulingIR;
+  calendar: ProjectCalendar;
+  progress: ProgressSnapshot;
+}
+
+export interface CompletedTask {
+  id: string;
+  name: string;
+  assignee_id: string;
+  actual_finish_date: string;
+  actual_end_day_exclusive: number;
+  actual_end_date_exclusive: string;
+}
+
+export interface RescheduleResult extends CalendarFinish {
+  status: SolverStatus;
+  progress_as_of_date: string;
+  replanning_start_day: number | null;
+  replanning_start_date: string | null;
+  remaining_horizon_days: number | null;
+  scheduled_tasks: (ScheduledTask & { start_date: string; final_work_date: string; end_date_exclusive: string })[];
+  completed_tasks: CompletedTask[];
+  solve_time_ms: number;
+  errors: string[];
+}
 
 /**
  * Payload yêu cầu phân tích ngôn ngữ tự nhiên POST /api/parse.

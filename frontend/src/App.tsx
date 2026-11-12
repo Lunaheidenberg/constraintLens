@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { CalendarDays, CircleHelp, LayoutGrid, ListTodo, LoaderCircle, Play } from "lucide-react";
+import { isCalendarDate } from "./calendar";
+import { initialPlans, planReducer } from "./plans";
+import { ProgressEditor } from "./ProgressEditor";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
-import type { PresetsMap, ScheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse } from "./types";
+import type { PresetsMap, ProjectCalendar, ProgressSnapshot, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse } from "./types";
 
 const API_BASE = "http://localhost:8000";
 
@@ -13,6 +16,7 @@ const EMPTY_PROJECT: SchedulingIR = {
   members: [],
   tasks: [],
 };
+const EMPTY_CALENDAR: ProjectCalendar = { project_start_date: "", target_deadline_date: null };
 
 interface ProjectState {
   ir: SchedulingIR;
@@ -22,10 +26,19 @@ interface ProjectState {
 }
 
 interface Feedback {
-  revision: number;
   message: string;
   errors: string[];
 }
+
+function calendarErrors(calendar: ProjectCalendar) {
+  const { project_start_date: start, target_deadline_date: deadline } = calendar;
+  if (!isCalendarDate(start)) return ["Chọn ngày bắt đầu dự án hợp lệ."];
+  if (deadline && !isCalendarDate(deadline)) return ["Chọn hạn chót hợp lệ hoặc để trống."];
+  if (deadline && deadline < start) return ["Hạn chót mục tiêu không được trước ngày bắt đầu dự án."];
+  return [];
+}
+
+const hasSolution = (status: string) => status === "OPTIMAL" || status === "FEASIBLE";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response;
@@ -115,18 +128,27 @@ export default function App() {
   const [parseError, setParseError] = useState("");
   const [pendingDraft, setPendingDraft] = useState<SchedulingIR | null>(null);
   const [editing, setEditing] = useState<number | "new" | null>(null);
-  const [deadline, setDeadline] = useState<number | null>(null);
-  const [phase, setPhase] = useState<"validating" | "solving" | null>(null);
+  const [calendar, setCalendar] = useState(EMPTY_CALENDAR);
+  const [asOf, setAsOf] = useState("");
+  const [entries, setEntries] = useState<ReadonlyMap<string, string>>(new Map());
+  const [plans, dispatchPlan] = useReducer(planReducer, initialPlans);
+  const [phase, setPhase] = useState<"validating" | "solving" | "checkingProgress" | "rescheduling" | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [schedule, setSchedule] = useState<{ revision: number; result: ScheduleResult } | null>(null);
+  const [progressFeedback, setProgressFeedback] = useState<Feedback | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
+  const progressPanel = useRef<HTMLDetailsElement>(null);
   const editVersion = useRef(0);
   const nextMemberId = useRef(1);
 
-  const localErrors = schedulingErrors(ir);
-  const result = schedule?.revision === scheduleRevision ? schedule.result : null;
-  const outdated = schedule !== null && result === null;
-  const currentFeedback = feedback?.revision === scheduleRevision ? feedback : null;
+  const dateErrors = calendarErrors(calendar);
+  const localErrors = [...dateErrors, ...schedulingErrors(ir)];
+  const { accepted, proposal } = plans;
+  const outdated = accepted !== null && accepted.scheduleRevision !== scheduleRevision;
+  const completed = new Map((accepted?.recovery?.completed_tasks ?? []).map((task) => [task.id, task]));
+  const lockedTasks = new Set(completed.keys());
+  const acceptedAsOf = accepted?.recovery?.progress_as_of_date ?? "";
+  const minimumAsOf = acceptedAsOf > calendar.project_start_date ? acceptedAsOf : calendar.project_start_date;
+  const progressPhase = phase === "checkingProgress" || phase === "rescheduling" ? phase : null;
   const editedTask = editing === "new" ? newTask(ir) : editing === null ? null : ir.tasks[editing];
 
   useEffect(() => {
@@ -143,15 +165,28 @@ export default function App() {
     setPhase(null);
   }
 
+  function invalidateProposal() {
+    cancelScheduling();
+    dispatchPlan({ type: "inputsChanged" });
+    setFeedback(null);
+    setProgressFeedback(null);
+  }
+
   function changeProject(update: (current: SchedulingIR) => SchedulingIR, affectsSchedule = true) {
     editVersion.current += 1;
-    if (affectsSchedule) cancelScheduling();
+    invalidateProposal();
     setProject((current) => ({
       ...current,
       ir: update(current.ir),
       scheduleRevision: current.scheduleRevision + Number(affectsSchedule),
       dirty: true,
     }));
+  }
+
+  function changeCalendar(next: ProjectCalendar) {
+    if (next.project_start_date === calendar.project_start_date && next.target_deadline_date === calendar.target_deadline_date) return;
+    changeProject((current) => current, next.project_start_date !== calendar.project_start_date);
+    setCalendar(next);
   }
 
   function loadProject(draft: SchedulingIR, preset = "") {
@@ -164,10 +199,13 @@ export default function App() {
       dirty: false,
     }));
     setSelectedPreset(preset);
-    setSchedule(null);
+    dispatchPlan({ type: "reset" });
     setFeedback(null);
+    setProgressFeedback(null);
     setEditing(null);
-    setDeadline(null);
+    setCalendar(EMPTY_CALENDAR);
+    setAsOf("");
+    setEntries(new Map());
     setPendingDraft(null);
     setParseError("");
   }
@@ -194,13 +232,13 @@ export default function App() {
   }
 
   async function validateProject(solve: boolean) {
-    if (activeRequest.current || localErrors.length) return;
+    if (activeRequest.current || localErrors.length || (solve && accepted)) return;
     const controller = new AbortController();
     activeRequest.current = controller;
     const { signal } = controller;
     setPhase("validating");
     setFeedback(null);
-    const report = (message: string, errors: string[] = []) => setFeedback({ revision: scheduleRevision, message, errors });
+    const report = (message: string, errors: string[] = []) => setFeedback({ message, errors });
     try {
       const validation = await post<ValidateResponse>("/api/validate?require_assignments=true", ir, signal);
       if (signal.aborted) return;
@@ -214,19 +252,81 @@ export default function App() {
       }
 
       setPhase("solving");
-      const body: SolveRequest = { ir, scheduling_mode: "member" };
-      const { result: solved } = await post<SolveResponse>("/api/solve", body, signal);
+      const body: SolveRequest = { ir, scheduling_mode: "member", calendar };
+      const { result: solved, calendar: solvedCalendar } = await post<SolveResponse>("/api/solve", body, signal);
       if (signal.aborted) return;
       if (solved.scheduling_mode !== "member") {
         report("Không thể hiển thị lịch", ["API cần trả về lịch theo thành viên. Kiểm tra phiên bản máy chủ."]);
-      } else if (!["OPTIMAL", "FEASIBLE"].includes(solved.status) || !solved.scheduled_tasks.length) {
+      } else if (!hasSolution(solved.status)) {
         report(`Không thể lập lịch (${solved.status})`, solved.errors.length ? solved.errors : ["Kiểm tra dự án và thử lại."]);
+      } else if (!solvedCalendar?.final_work_date || !solved.scheduled_tasks.length) {
+        report("Không thể hiển thị lịch", ["API chưa trả về lịch theo ngày. Kiểm tra phiên bản máy chủ."]);
       } else {
-        setSchedule({ revision: scheduleRevision, result: solved });
-        report("Đã lập lịch theo thành viên.");
+        dispatchPlan({ type: "propose", revision: plans.revision, plan: {
+          calendar: solvedCalendar, status: solved.status, scheduledTasks: solved.scheduled_tasks,
+          solveTimeMs: solved.solve_time_ms, tasks: ir.tasks, members, scheduleRevision, recovery: null,
+        } });
+        report("Lịch ban đầu đã sẵn sàng để xem và chấp nhận.");
       }
     } catch (error) {
       if (!signal.aborted) report("Yêu cầu lập lịch chưa hoàn tất", [errorMessage(error)]);
+    } finally {
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+        setPhase(null);
+      }
+    }
+  }
+
+  async function requestRecovery(solve: boolean) {
+    if (activeRequest.current || !accepted || localErrors.length || !isCalendarDate(asOf) || asOf < minimumAsOf || asOf === "9999-12-31") return;
+    const taskProgress: [string, ProgressSnapshot["task_progress"][string]][] = [];
+    const errors: string[] = [];
+    for (const task of ir.tasks) {
+      const value = entries.get(task.id);
+      if (task.status === "Doing" && value) {
+        const duration = Number(value);
+        if (!Number.isSafeInteger(duration) || duration < 1) errors.push(`Nhập số ngày còn lại là số nguyên dương cho '${task.id}'.`);
+        else taskProgress.push([task.id, { remaining_duration: duration }]);
+      } else if (task.status === "Done") {
+        const finish = completed.get(task.id)?.actual_finish_date ?? value;
+        if (finish) taskProgress.push([task.id, { actual_finish_date: finish }]);
+      }
+    }
+    const report = (message: string, errors: string[] = []) => setProgressFeedback({ message, errors });
+    if (errors.length) {
+      report("Sửa thông tin tiến độ", errors);
+      return;
+    }
+
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    const { signal } = controller;
+    setPhase(solve ? "rescheduling" : "checkingProgress");
+    setProgressFeedback(null);
+    const payload: RescheduleRequest = { ir, calendar, progress: { progress_as_of_date: asOf, task_progress: Object.fromEntries(taskProgress) } };
+    try {
+      if (!solve) {
+        const validation = await post<ValidateResponse>("/api/reschedule/validate", payload, signal);
+        if (!signal.aborted) report(validation.valid ? "Tiến độ hợp lệ." : "Sửa thông tin tiến độ", validation.errors);
+        return;
+      }
+      const revised = await post<RescheduleResult>("/api/reschedule", payload, signal);
+      if (signal.aborted) return;
+      if (!hasSolution(revised.status)) {
+        report(revised.status === "INVALID_INPUT" ? "Sửa thông tin tiến độ" : `Chưa có lịch đề xuất (${revised.status})`, revised.errors);
+        return;
+      }
+      const { status, scheduled_tasks, solve_time_ms, errors: _errors, ...rest } = revised;
+      const { progress_as_of_date, replanning_start_day, replanning_start_date, remaining_horizon_days, completed_tasks, ...finish } = rest;
+      dispatchPlan({ type: "propose", revision: plans.revision, plan: {
+        calendar: finish, status, scheduledTasks: scheduled_tasks, solveTimeMs: solve_time_ms,
+        tasks: ir.tasks, members, scheduleRevision,
+        recovery: { progress_as_of_date, replanning_start_day, replanning_start_date, remaining_horizon_days, completed_tasks },
+      } });
+      report("Lịch mới đã sẵn sàng để xem và chấp nhận.");
+    } catch (error) {
+      if (!signal.aborted) report("Yêu cầu lập lại lịch chưa hoàn tất", [errorMessage(error)]);
     } finally {
       if (activeRequest.current === controller) {
         activeRequest.current = null;
@@ -244,6 +344,11 @@ export default function App() {
   }
 
   function updateTask(index: number, patch: Partial<Task>, affectsSchedule = true) {
+    const task = ir.tasks[index];
+    if (completed.has(task.id)) return;
+    if (patch.status && patch.status !== (task.status ?? "To Do")) {
+      setEntries((current) => { const next = new Map(current); next.delete(task.id); return next; });
+    }
     changeProject((current) => ({
       ...current,
       tasks: current.tasks.map((task, taskIndex) => taskIndex === index ? { ...task, ...patch } : task),
@@ -257,12 +362,21 @@ export default function App() {
     }
     if (editing === null) return;
     const original = ir.tasks[editing];
+    if (completed.has(original.id)) return;
     const affectsSchedule = updated.id !== original.id || updated.name !== original.name ||
       updated.duration !== original.duration || taskCategory(updated) !== taskCategory(original) ||
       (updated.assignee_id ?? null) !== (original.assignee_id ?? null) ||
       JSON.stringify(updated.dependencies) !== JSON.stringify(original.dependencies);
     if (!affectsSchedule && (updated.status ?? "To Do") === (original.status ?? "To Do")) return;
 
+    const sameStatus = (updated.status ?? "To Do") === (original.status ?? "To Do");
+    if (!sameStatus || original.id !== updated.id) setEntries((current) => {
+      const next = new Map(current);
+      const previous = next.get(original.id);
+      next.delete(original.id);
+      if (previous !== undefined && sameStatus) next.set(updated.id, previous);
+      return next;
+    });
     changeProject((current) => {
       const renamed = original.id !== updated.id && !current.tasks.some((task, index) => index !== editing && task.id === original.id);
       const tasks = current.tasks.map((task, index) => {
@@ -275,6 +389,9 @@ export default function App() {
   }
 
   function removeTask(index: number) {
+    const task = ir.tasks[index];
+    if (completed.has(task.id)) return;
+    setEntries((current) => { const next = new Map(current); next.delete(task.id); return next; });
     changeProject((current) => {
       const id = current.tasks[index].id;
       const remaining = current.tasks.filter((_, taskIndex) => taskIndex !== index);
@@ -287,8 +404,16 @@ export default function App() {
   }
 
   function openTaskEditor(selection: number | "new") {
+    if (selection !== "new" && completed.has(ir.tasks[selection].id)) return;
     editVersion.current += 1;
     setEditing(selection);
+  }
+
+  function changeProgress(update: () => void) {
+    editVersion.current += 1;
+    invalidateProposal();
+    setProject((current) => ({ ...current, dirty: true }));
+    update();
   }
 
   return (
@@ -367,39 +492,45 @@ export default function App() {
 
           <section aria-labelledby="planning-heading" className="space-y-2.5 border-t border-zinc-800 pt-4">
             <h2 id="planning-heading" className="text-sm font-semibold">Lập lịch</h2>
-            <label className="field">Hạn chót mục tiêu (ngày)
-              <input type="number" min="1" max={Number.MAX_SAFE_INTEGER} step="1" className="control w-full"
-                placeholder="Tùy chọn" onChange={(event) => {
-                  const value = event.target.valueAsNumber;
-                  setDeadline(Number.isSafeInteger(value) && value > 0 ? value : null);
-                }} key={instance} />
+            <label className="field">Ngày bắt đầu dự án
+              <input type="date" required className="control w-full" value={calendar.project_start_date}
+                onChange={(event) => changeCalendar({ ...calendar, project_start_date: event.target.value })} />
+            </label>
+            <label className="field">Hạn chót mục tiêu (tùy chọn)
+              <input type="date" className="control w-full" min={calendar.project_start_date || undefined}
+                value={calendar.target_deadline_date ?? ""}
+                onChange={(event) => changeCalendar({ ...calendar, target_deadline_date: event.target.value || null })} />
             </label>
             <div className="grid grid-cols-[auto_1fr] gap-2">
               <button className="button" disabled={!!phase || localErrors.length > 0} onClick={() => void validateProject(false)}>Kiểm tra</button>
-              <button className="button primary" disabled={!!phase || localErrors.length > 0} onClick={() => void validateProject(true)}>
-                {phase ? <LoaderCircle size={14} className="animate-spin" aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
-                Tính lịch
-              </button>
+              {accepted ? <a href="#progress-heading" className="button justify-center" onClick={() => {
+                if (progressPanel.current) progressPanel.current.open = true;
+              }}>Cập nhật tiến độ</a> : (
+                <button className="button primary" disabled={!!phase || localErrors.length > 0} onClick={() => void validateProject(true)}>
+                  {phase ? <LoaderCircle size={14} className="animate-spin" aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
+                  Tính lịch ban đầu
+                </button>
+              )}
             </div>
-            {phase && <p className="text-xs text-zinc-400" role="status">{phase === "validating" ? "Đang kiểm tra dự án…" : "CP-SAT đang tính lịch…"}</p>}
+            {(phase === "validating" || phase === "solving") && <p className="text-xs text-zinc-400" role="status">{phase === "validating" ? "Đang kiểm tra dự án…" : "CP-SAT đang tính lịch…"}</p>}
             {localErrors.length > 0 && (
               <ul className="notice list-disc space-y-1 pl-6 text-amber-200" aria-label="Điều kiện lập lịch">
                 {localErrors.map((error, index) => <li key={index}>{error}</li>)}
               </ul>
             )}
-            {currentFeedback && (
-              <div className={`notice ${currentFeedback.errors.length ? "text-rose-300" : "text-emerald-300"}`}
-                role={currentFeedback.errors.length ? "alert" : "status"}>
-                <p className="font-medium">{currentFeedback.message}</p>
-                {currentFeedback.errors.length > 0 && (
+            {feedback && (
+              <div className={`notice ${feedback.errors.length ? "text-rose-300" : "text-emerald-300"}`}
+                role={feedback.errors.length ? "alert" : "status"}>
+                <p className="font-medium">{feedback.message}</p>
+                {feedback.errors.length > 0 && (
                   <ul className="mt-1 list-disc space-y-1 whitespace-pre-line pl-4">
-                    {currentFeedback.errors.map((error, index) => <li key={index}>{error}</li>)}
+                    {feedback.errors.map((error, index) => <li key={index}>{error}</li>)}
                   </ul>
                 )}
               </div>
             )}
-            {result && (
-              <a href="#schedule-heading" className="inline-flex items-center gap-1.5 rounded text-xs font-medium text-indigo-300 hover:underline">
+            {(accepted || proposal) && (
+              <a href={proposal ? "#schedule-proposal" : "#schedule-heading"} className="inline-flex items-center gap-1.5 rounded text-xs font-medium text-indigo-300 hover:underline">
                 <CalendarDays size={14} aria-hidden="true" /> Xem biểu đồ Gantt
               </a>
             )}
@@ -415,22 +546,61 @@ export default function App() {
         <div className="space-y-6 p-4 sm:p-6">
           <section aria-labelledby="tasks-heading">
             <SectionTitle id="tasks-heading" icon={ListTodo}>Công việc</SectionTitle>
-            <TaskTable tasks={ir.tasks} members={members} onEdit={openTaskEditor} onAdd={() => openTaskEditor("new")}
+            <TaskTable tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor} onAdd={() => openTaskEditor("new")}
               onAssign={(index, assignee_id) => updateTask(index, { assignee_id })} />
           </section>
           <section aria-labelledby="kanban-heading">
             <SectionTitle id="kanban-heading" icon={LayoutGrid}>Kanban · Tiến độ thực tế</SectionTitle>
-            <Kanban key={instance} tasks={ir.tasks} members={members} onEdit={openTaskEditor}
+            <Kanban key={instance} tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor}
               onMove={(index, status) => updateTask(index, { status }, false)} />
           </section>
+          <ProgressEditor key={instance} panelRef={progressPanel} calendar={calendar} tasks={ir.tasks} asOf={asOf} entries={entries} completed={completed}
+            hasAcceptedPlan={!!accepted} minimumAsOf={minimumAsOf} canRequest={!phase && !localErrors.length}
+            projectNeedsCorrections={localErrors.length > 0}
+            phase={progressPhase} feedback={progressFeedback} hasProposal={!!proposal?.plan.recovery}
+            onDateChange={(value) => changeProgress(() => setAsOf(value))}
+            onEntryChange={(id, value) => changeProgress(() => setEntries((current) => new Map(current).set(id, value)))}
+            onRequest={(solve) => void requestRecovery(solve)} />
           <section aria-labelledby="schedule-heading">
             <SectionTitle id="schedule-heading" icon={CalendarDays}>Gantt · Lịch dự kiến</SectionTitle>
-            {result ? <Schedule result={result} tasks={ir.tasks} members={members} deadline={deadline} /> : (
-              <div className={`panel flex items-start gap-2.5 p-3 text-xs ${outdated ? "text-amber-200" : "text-zinc-400"}`} role="status">
-                <CircleHelp size={15} className="shrink-0" aria-hidden="true" />
-                {outdated ? "Lịch cũ đã lỗi thời. Chọn Tính lịch để cập nhật theo dữ liệu hiện tại." : "Phân công công việc rồi chọn Tính lịch để xem lịch dự kiến."}
-              </div>
-            )}
+            <div className="space-y-4">
+              {plans.stale && <p className="notice text-amber-200" role="status">Đã bỏ đề xuất vì dữ liệu thay đổi. Hãy tính lại lịch.</p>}
+              {proposal && (
+                <section id="schedule-proposal" className="space-y-3 rounded-lg border border-indigo-500/60 p-3" aria-labelledby="proposal-heading">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 id="proposal-heading" className="text-sm font-semibold text-indigo-200">{proposal.plan.recovery ? "Lịch mới đề xuất" : "Lịch ban đầu đề xuất"}</h3>
+                    <div className="flex gap-2">
+                      <button className="button" onClick={() => {
+                        cancelScheduling();
+                        dispatchPlan({ type: "cancel" });
+                        setFeedback(null);
+                        setProgressFeedback(null);
+                      }}>Hủy đề xuất</button>
+                      <button className="button primary" disabled={!!phase} onClick={() => {
+                        dispatchPlan({ type: "accept" });
+                        editVersion.current += 1;
+                        setFeedback(null);
+                        setProgressFeedback(null);
+                      }}>Chấp nhận lịch</button>
+                    </div>
+                  </div>
+                  <Schedule plan={proposal.plan} members={members} deadline={proposal.plan.calendar.target_deadline_date} />
+                </section>
+              )}
+              {accepted ? (
+                <section className="space-y-3" aria-labelledby="accepted-heading">
+                  <h3 id="accepted-heading" className="text-sm font-semibold text-emerald-300">Lịch đang áp dụng</h3>
+                  {outdated && <p className="notice text-amber-200" role="status">Lịch đang áp dụng đã lỗi thời. Lập lại lịch theo dữ liệu hiện tại để cập nhật.</p>}
+                  <Schedule plan={accepted} members={members} deadline={accepted.calendar.project_start_date !== calendar.project_start_date
+                    ? accepted.calendar.target_deadline_date : dateErrors.length ? null : calendar.target_deadline_date} />
+                </section>
+              ) : !proposal && (
+                <div className="panel flex items-start gap-2.5 p-3 text-xs text-zinc-400" role="status">
+                  <CircleHelp size={15} className="shrink-0" aria-hidden="true" />
+                  Chọn ngày bắt đầu, phân công công việc rồi tính lịch ban đầu.
+                </div>
+              )}
+            </div>
           </section>
         </div>
       </main>

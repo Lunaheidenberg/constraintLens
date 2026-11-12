@@ -11,7 +11,8 @@ Quy tắc kiến trúc (architecture.md):
 """
 
 from typing import List, Dict, Set, Tuple, Optional
-from models import SchedulingIR, KanbanConfig, Task
+from models import SchedulingIR, KanbanConfig, ProgressSnapshot, Task, TaskProgress
+from project_calendar import ProjectCalendar, calendar_range_errors, end_of_day_boundary
 
 
 class SchedulingValidationError(Exception):
@@ -183,6 +184,57 @@ def validate_ir(
     if raise_on_error and errors:
         raise SchedulingValidationError(errors)
 
+    return errors
+
+
+def validate_progress(ir: SchedulingIR, calendar: ProjectCalendar, snapshot: ProgressSnapshot) -> list[str]:
+    errors = validate_ir(ir, require_assignments=True)
+    start, as_of = calendar.project_start_date, snapshot.progress_as_of_date
+    if as_of < start:
+        errors.append("Ngày báo cáo tiến độ không được trước ngày bắt đầu dự án.")
+
+    tasks = {task.id: task for task in ir.tasks}
+    for task_id in sorted(snapshot.task_progress.keys() - tasks.keys()):
+        errors.append(f"Thông tin tiến độ tham chiếu công việc không tồn tại: '{task_id}'.")
+
+    empty = TaskProgress()
+    remaining = 0
+    for task in ir.tasks:
+        progress = snapshot.task_progress.get(task.id, empty)
+        finish = progress.actual_finish_date
+        days = progress.remaining_duration
+        if task.status == "Done":
+            if finish is None:
+                errors.append(f"Nhập ngày hoàn thành thực tế cho '{task.id}' (Done).")
+            elif not start <= finish <= as_of:
+                errors.append(f"Ngày hoàn thành thực tế của '{task.id}' phải từ ngày bắt đầu dự án đến hết ngày báo cáo.")
+        elif finish is not None:
+            errors.append(f"Chỉ công việc Done mới được có ngày hoàn thành thực tế: '{task.id}'.")
+
+        if task.status == "Doing":
+            if days is None:
+                errors.append(f"Nhập số ngày còn lại (số nguyên dương) cho '{task.id}' (Doing).")
+            else:
+                remaining += days
+        else:
+            if days is not None:
+                errors.append(f"Chỉ nhập số ngày còn lại cho công việc Doing: '{task.id}'.")
+            if task.status == "To Do":
+                remaining += task.duration
+
+        if task.status in ("Done", "Doing"):
+            for dep_id in task.dependencies:
+                if dep_id not in tasks or dep_id == task.id:
+                    continue  # validate_ir đã báo lỗi tham chiếu.
+                if tasks[dep_id].status != "Done":
+                    errors.append(f"'{task.id}' ({task.status}) cần công việc tiên quyết '{dep_id}' ở trạng thái Done.")
+                    continue
+                dep_finish = snapshot.task_progress.get(dep_id, empty).actual_finish_date
+                # Một công việc phụ thuộc chỉ có thể bắt đầu từ ngày kế tiếp.
+                if task.status == "Done" and finish is not None and dep_finish is not None and finish <= dep_finish:
+                    errors.append(f"Ngày hoàn thành của '{task.id}' phải sau ngày hoàn thành của tiên quyết '{dep_id}'.")
+
+    errors.extend(calendar_range_errors(calendar, end_of_day_boundary(start, as_of) + remaining))
     return errors
 
 

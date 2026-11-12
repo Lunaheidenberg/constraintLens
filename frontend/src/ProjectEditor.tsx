@@ -92,16 +92,17 @@ export function Members({ members, tasks, onAdd, onRename, onRemove }: MembersPr
   );
 }
 
-function AssigneeSelect({ members, task, onChange }: {
+function AssigneeSelect({ members, task, onChange, disabled }: {
   members: ProjectMember[];
   task: Task;
   onChange: (id: string | null) => void;
+  disabled?: boolean;
 }) {
   const assigneeId = task.assignee_id;
   const missing = assigneeId != null && !members.some((member) => member.id === assigneeId);
   return (
     <select className={`control w-full ${missing || !task.assignee_id ? "text-amber-300" : ""}`}
-      aria-label={`Người phụ trách ${task.id}`} value={task.assignee_id ?? ""}
+      aria-label={`Người phụ trách ${task.id}`} value={task.assignee_id ?? ""} disabled={disabled}
       onChange={(event) => onChange(event.target.value || null)}>
       <option value="">Chưa phân công</option>
       {missing && <option value={assigneeId}>Thành viên không hợp lệ</option>}
@@ -110,9 +111,9 @@ function AssigneeSelect({ members, task, onChange }: {
   );
 }
 
-function StatusSelect({ task, onChange }: { task: Task; onChange: (status: KanbanStatus) => void }) {
+function StatusSelect({ task, onChange, disabled }: { task: Task; onChange: (status: KanbanStatus) => void; disabled?: boolean }) {
   return (
-    <select className="control w-full" aria-label={`Trạng thái ${task.id}`} value={task.status ?? "To Do"}
+    <select className="control w-full" aria-label={`Trạng thái ${task.id}`} value={task.status ?? "To Do"} disabled={disabled}
       onChange={(event) => onChange(event.target.value as KanbanStatus)}>
       {STATUSES.map((status) => <option key={status}>{status}</option>)}
     </select>
@@ -122,10 +123,11 @@ function StatusSelect({ task, onChange }: { task: Task; onChange: (status: Kanba
 interface TaskListProps {
   tasks: Task[];
   members: ProjectMember[];
+  lockedTasks: ReadonlySet<string>;
   onEdit: (index: number) => void;
 }
 
-export function Kanban({ tasks, members, onEdit, onMove }: TaskListProps & {
+export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskListProps & {
   onMove: (index: number, status: KanbanStatus) => void;
 }) {
   const [dragging, setDragging] = useState<number | null>(null);
@@ -143,7 +145,7 @@ export function Kanban({ tasks, members, onEdit, onMove }: TaskListProps & {
 
   function move(index: number, status: KanbanStatus) {
     const task = tasks[index];
-    if ((task.status ?? "To Do") === status) return;
+    if (lockedTasks.has(task.id) || (task.status ?? "To Do") === status) return;
     onMove(index, status);
     setAnnouncement(`${task.id} đã chuyển sang ${status}.`);
   }
@@ -185,10 +187,11 @@ export function Kanban({ tasks, members, onEdit, onMove }: TaskListProps & {
                 <ul className="space-y-2">
                   {columnTasks.map(({ task, index }) => {
                     const member = members.find((item) => item.id === task.assignee_id);
+                    const locked = lockedTasks.has(task.id);
                     return (
                       <li key={`${task.id}-${index}`} className={`rounded-md border border-zinc-800 bg-[#16161a] px-2.5 py-2 ${dragging === index ? "opacity-50" : ""}`}>
                         <div className="flex items-start gap-1.5">
-                          <span draggable className="mt-0.5 shrink-0 cursor-grab text-zinc-500 active:cursor-grabbing" title="Kéo để chuyển trạng thái"
+                          {!locked && <span draggable className="mt-0.5 shrink-0 cursor-grab text-zinc-500 active:cursor-grabbing" title="Kéo để chuyển trạng thái"
                             onDragStart={(event) => {
                               event.dataTransfer.setData("text/plain", task.id);
                               event.dataTransfer.effectAllowed = "move";
@@ -196,9 +199,9 @@ export function Kanban({ tasks, members, onEdit, onMove }: TaskListProps & {
                             }}
                             onDragEnd={() => { setDragging(null); setOver(null); }}>
                             <GripVertical size={15} aria-hidden="true" />
-                          </span>
+                          </span>}
                           <button className="min-w-0 flex-1 break-words rounded text-left text-sm font-medium leading-snug hover:text-indigo-300"
-                            onClick={() => onEdit(index)} aria-label={`Sửa công việc ${task.id} trên Kanban`}>{task.name}</button>
+                            disabled={locked} onClick={() => onEdit(index)} aria-label={`Sửa công việc ${task.id} trên Kanban`}>{task.name}</button>
                           <span className="max-w-[5rem] truncate font-mono text-[10px] text-zinc-400" title={task.id}>{task.id}</span>
                         </div>
                         <div className="mb-2 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-xs">
@@ -208,10 +211,11 @@ export function Kanban({ tasks, members, onEdit, onMove }: TaskListProps & {
                           </span>
                         </div>
                         <div className="pl-5" data-status-index={index}>
-                          <StatusSelect task={task} onChange={(next) => {
+                          <StatusSelect task={task} disabled={locked} onChange={(next) => {
                             restoreFocus.current = index;
                             move(index, next);
                           }} />
+                          {locked && <p className="mt-1 text-xs text-emerald-300">Đã xác nhận hoàn thành</p>}
                         </div>
                       </li>
                     );
@@ -226,7 +230,7 @@ export function Kanban({ tasks, members, onEdit, onMove }: TaskListProps & {
   );
 }
 
-export function TaskTable({ tasks, members, onEdit, onAssign, onAdd }: TaskListProps & {
+export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd }: TaskListProps & {
   onAssign: (index: number, assignee: string | null) => void;
   onAdd: () => void;
 }) {
@@ -248,7 +252,7 @@ export function TaskTable({ tasks, members, onEdit, onAssign, onAdd }: TaskListP
               <tr key={`${task.id}-${index}`} className="hover:bg-white/[0.025]">
                 <td className="px-3 py-2">
                   <button className="flex items-baseline gap-2 rounded text-left hover:text-indigo-300"
-                    onClick={() => onEdit(index)} aria-label={`Sửa công việc ${task.id}`}>
+                    disabled={lockedTasks.has(task.id)} onClick={() => onEdit(index)} aria-label={`Sửa công việc ${task.id}`}>
                     <span className="max-w-20 truncate font-mono text-[10px] text-zinc-400" title={task.id}>{task.id}</span>
                     <span className="min-w-0 break-words font-medium">{task.name}</span>
                   </button>
@@ -256,7 +260,7 @@ export function TaskTable({ tasks, members, onEdit, onAssign, onAdd }: TaskListP
                 <td className="max-w-28 break-words px-3 py-2 text-zinc-400">{taskCategory(task)}</td>
                 <td className="px-3 py-2 tabular-nums">{task.duration}</td>
                 <td className="w-40 px-3 py-2">
-                  <AssigneeSelect task={task} members={members} onChange={(id) => onAssign(index, id)} />
+                  <AssigneeSelect task={task} members={members} disabled={lockedTasks.has(task.id)} onChange={(id) => onAssign(index, id)} />
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-zinc-400">{task.status ?? "To Do"}</td>
               </tr>

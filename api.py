@@ -7,6 +7,7 @@ Cung cấp các API:
   - POST /api/parse    : Phân tích mô tả tự nhiên thành SchedulingIR bằng Gemini
   - POST /api/validate : Kiểm tra tính toàn vẹn và chu trình đồ thị (DAG Cycle)
   - POST /api/solve    : Giải RCPSP bằng CP-SAT và phân tích What-If Counterfactual
+  - POST /api/reschedule : Lập lại lịch theo tiến độ cuối ngày đã xác nhận
 """
 
 import os
@@ -17,10 +18,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from models import KanbanConfig, SchedulingIR, Task
+from models import KanbanConfig, ProgressSnapshot, SchedulingIR, Task
 from parser import parse_kanban_prompt
-from solver import ScheduleResult, SchedulingMode, solve_schedule
-from validator import validate_ir
+from project_calendar import CalendarFinish, ProjectCalendar, calendar_finish, calendar_range_errors
+from solver import RescheduleResult, ScheduleResult, SchedulingMode, reschedule_project, solve_schedule
+from validator import validate_ir, validate_progress
 
 
 # =============================================================================
@@ -160,6 +162,7 @@ class SolveRequest(BaseModel):
         description="Chế độ lập lịch. Nếu bỏ qua, dùng lịch theo thành viên khi có thành viên hoặc phân công.",
     )
     target_deadline: Optional[int] = Field(default=None, description="Mục tiêu deadline (số ngày).")
+    calendar: ProjectCalendar | None = None
     time_limit_sec: Optional[float] = Field(default=10.0, description="Giới hạn thời gian giải toán CP-SAT.")
 
     @model_validator(mode="before")
@@ -174,11 +177,13 @@ class SolveRequest(BaseModel):
                 data_copy = dict(data)
                 scheduling_mode = data_copy.pop("scheduling_mode", None)
                 target_deadline = data_copy.pop("target_deadline", None)
+                calendar = data_copy.pop("calendar", None)
                 time_limit_sec = data_copy.pop("time_limit_sec", 10.0)
                 return {
                     "ir": data_copy,
                     "scheduling_mode": scheduling_mode,
                     "target_deadline": target_deadline,
+                    "calendar": calendar,
                     "time_limit_sec": time_limit_sec,
                 }
         return data
@@ -190,6 +195,14 @@ class SolveResponse(BaseModel):
         default_factory=list,
         description="Danh sách gợi ý What-If Counterfactual để giải cứu deadline.",
     )
+    calendar: CalendarFinish | None = None
+
+
+class RescheduleRequest(BaseModel):
+    ir: SchedulingIR
+    calendar: ProjectCalendar
+    progress: ProgressSnapshot
+    time_limit_sec: float = Field(default=10.0, gt=0, allow_inf_nan=False)
 
 
 # =============================================================================
@@ -252,6 +265,10 @@ def solve_project_schedule(payload: SolveRequest):
     Giải bài toán lập lịch dự án RCPSP bằng CP-SAT và thực hiện phân tích
     What-If Counterfactual (Cố vấn giải cứu Deadline) nếu makespan > target_deadline.
     """
+    if payload.calendar is not None:
+        errors = calendar_range_errors(payload.calendar, sum(task.duration for task in payload.ir.tasks))
+        if errors:
+            raise HTTPException(status_code=422, detail=errors[0])
     time_limit = payload.time_limit_sec if payload.time_limit_sec and payload.time_limit_sec > 0 else 10.0
     result = solve_schedule(payload.ir, time_limit_sec=time_limit, scheduling_mode=payload.scheduling_mode)
 
@@ -364,8 +381,21 @@ def solve_project_schedule(payload: SolveRequest):
                     f"(do giới hạn bởi đường găng chuỗi phụ thuộc). Cân nhắc giảm scope hoặc chia nhỏ các task phụ thuộc."
                 )
 
+    end_day = result.makespan if result.status in ("OPTIMAL", "FEASIBLE") else None
     return SolveResponse(
         result=result,
         rescue_suggestions=rescue_suggestions,
+        calendar=None if payload.calendar is None else calendar_finish(payload.calendar, end_day),
     )
+
+
+@app.post("/api/reschedule/validate", response_model=ValidateResponse)
+def validate_reschedule(payload: RescheduleRequest):
+    errors = validate_progress(payload.ir, payload.calendar, payload.progress)
+    return ValidateResponse(valid=not errors, errors=errors)
+
+
+@app.post("/api/reschedule", response_model=RescheduleResult)
+def reschedule(payload: RescheduleRequest):
+    return reschedule_project(payload.ir, payload.calendar, payload.progress, payload.time_limit_sec)
 

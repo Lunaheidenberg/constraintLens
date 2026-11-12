@@ -1,0 +1,46 @@
+import type { CalendarFinish, ProjectMember, RescheduleResult, ScheduledTask, Task } from "./types";
+
+export interface Plan {
+  calendar: CalendarFinish;
+  status: string;
+  scheduledTasks: ScheduledTask[];
+  solveTimeMs: number;
+  scheduleRevision: number;
+  tasks: Task[];
+  members: ProjectMember[];
+  recovery: Pick<RescheduleResult, "progress_as_of_date" | "replanning_start_day" | "replanning_start_date" |
+    "remaining_horizon_days" | "completed_tasks"> | null;
+}
+
+export interface PlanState {
+  revision: number;
+  baseline: Plan | null;
+  accepted: Plan | null;
+  proposal: { revision: number; plan: Plan } | null;
+  stale: boolean;
+}
+
+export const initialPlans: PlanState = { revision: 0, baseline: null, accepted: null, proposal: null, stale: false };
+
+type PlanAction =
+  | { type: "reset" | "inputsChanged" | "cancel" | "accept" }
+  | { type: "propose"; revision: number; plan: Plan };
+
+export function planReducer(state: PlanState, action: PlanAction): PlanState {
+  switch (action.type) {
+    case "reset":
+      return { ...initialPlans, revision: state.revision + 1 };
+    case "inputsChanged":
+      return { ...state, revision: state.revision + 1, proposal: null, stale: state.stale || state.proposal !== null };
+    case "propose":
+      if (action.revision !== state.revision) return state;
+      return { ...state, proposal: { revision: action.revision, plan: action.plan }, stale: false };
+    case "cancel":
+      return { ...state, proposal: null, stale: false };
+    case "accept": {
+      if (!state.proposal || state.proposal.revision !== state.revision) return state;
+      const plan = state.proposal.plan;
+      return { ...state, baseline: state.baseline ?? plan, accepted: plan, proposal: null, stale: false };
+    }
+  }
+}

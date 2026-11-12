@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Dict, Literal
+
+from project_calendar import CalendarDate
 
 
 KanbanStatus = Literal["To Do", "Doing", "Done"]
@@ -41,3 +43,17 @@ class SchedulingIR(BaseModel):
     kanban_config: KanbanConfig = Field(description="Cấu hình quy trình Kanban")
     tasks: List[Task] = Field(description="Danh sách toàn bộ các công việc cần làm")
     members: List[ProjectMember] = Field(default_factory=list, description="Danh sách thành viên dự án")
+
+
+class TaskProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    remaining_duration: int | None = Field(default=None, strict=True, ge=1)
+    actual_finish_date: CalendarDate | None = None
+
+
+class ProgressSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    progress_as_of_date: CalendarDate = Field(description="Tiến độ đã xác nhận đến hết ngày này.")
+    task_progress: dict[str, TaskProgress] = Field(default_factory=dict)
