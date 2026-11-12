@@ -7,6 +7,61 @@
     background-color: #09090b;
     color: #f4f4f5;
     font-family: 'Inter', sans-serif;
+    color-scheme: dark;
+  }
+
+  :focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-indigo-400;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-zinc-800 bg-[#121215];
+  }
+
+  .field {
+    @apply grid min-w-0 gap-1.5 text-xs font-medium text-zinc-300;
+  }
+
+  .control {
+    @apply min-h-8 min-w-0 rounded-md border border-zinc-700 bg-[#16161a] px-2 py-1.5 text-xs text-zinc-100;
+  }
+
+  .control:focus-visible {
+    @apply outline-offset-0;
+  }
+
+  .button {
+    @apply inline-flex min-h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800/60 px-2.5 py-1 text-xs font-medium hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .button.primary {
+    @apply border-indigo-500 bg-indigo-600 text-white hover:border-indigo-400 hover:bg-indigo-500;
+  }
+
+  .icon-button {
+    @apply size-8 p-0;
+  }
+
+  .notice {
+    @apply break-words rounded-md border border-zinc-800 bg-zinc-900 p-2.5 text-xs leading-relaxed;
+  }
+
+  .task-dialog {
+    @apply m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-y-auto text-zinc-200;
+  }
+
+  .task-dialog::backdrop {
+    @apply bg-black/65;
+  }
+
+  .gantt-row {
+    @apply grid grid-cols-[210px_1fr];
+  }
+
+  .gantt-wait {
+    background: repeating-linear-gradient(-45deg, #52525b70 0 2px, transparent 2px 5px);
   }
 }
 

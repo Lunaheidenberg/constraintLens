@@ -7,6 +7,6 @@
 - Member scheduling minimizes makespan with one task at a time per assigned member and respects dependency order. The T1 schema still accepts the legacy capacity and stage fields for compatibility. Member scheduling ignores them and treats Kanban status as progress metadata.
 - `result.scheduling_mode` identifies the mode used. Member results return the assigned owner in each scheduled task's `assignee_id` and return empty `stage_metrics` and `bottleneck_stages`. WIP and team-capacity deadline simulations run only in legacy mode. `UNKNOWN` means CP-SAT returned without a schedule or a proof of infeasibility.
 
-## T3 migration
+## React planning workflow
 
-The current React UI, unassigned presets, Gemini drafts, and the legacy Streamlit app can still run with WIP and team capacity. Once React supports manual member management and assignment in T3, have it request member scheduling and defer solving presets and drafts until their owners are confirmed. Migrate the preset and parser contracts and retire or migrate the Streamlit caller before removing legacy request routing, WIP validation, capacity constraints, stage metrics, deadline simulations, and the compatibility fields.
+Load a preset or create a Gemini draft, add members, and choose a member for each task. React validates the project with `require_assignments=true` and sends the confirmed input with `scheduling_mode: "member"`. Gantt shows planned intervals, and the Kanban board tracks progress independently. The legacy Streamlit workflow and API compatibility fields remain available.

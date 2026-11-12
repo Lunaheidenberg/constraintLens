@@ -204,7 +204,7 @@ class SchedulingApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Tăng WIP cột 'Build' từ 1 lên 2", data["rescue_suggestions"][0])
         self.assertTrue(all(task["assignee_id"] is None for task in result["scheduled_tasks"]))
 
-    async def test_all_presets_can_follow_the_existing_react_auto_solve_flow(self):
+    async def test_all_presets_remain_compatible_with_legacy_api_callers(self):
         presets = (await self.client.get("/api/presets")).raise_for_status().json()
         for name, ir in presets.items():
             with self.subTest(preset=name):
@@ -213,7 +213,7 @@ class SchedulingApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["scheduling_mode"], "legacy")
                 self.assertEqual(result["status"], "INVALID_INPUT" if "DAG Cycle" in name else "OPTIMAL")
 
-    async def test_gemini_draft_can_follow_the_existing_react_auto_solve_flow(self):
+    async def test_gemini_draft_remains_compatible_with_legacy_api_callers(self):
         draft = unassigned_project().model_dump()
         with patch("parser.genai.Client") as gemini:
             gemini.return_value.models.generate_content.return_value = SimpleNamespace(text=json.dumps(draft))
@@ -221,3 +221,41 @@ class SchedulingApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/api/solve", json={"ir": parsed.raise_for_status().json()})
         result = response.raise_for_status().json()["result"]
         self.assertEqual((result["scheduling_mode"], result["status"], result["makespan"]), ("legacy", "OPTIMAL", 5))
+
+    async def test_preset_can_be_assigned_validated_and_rescheduled_in_member_mode(self):
+        presets = (await self.client.get("/api/presets")).raise_for_status().json()
+        ir = next(draft for draft in presets.values() if draft["project_name"] == "Đồ án Web E-Commerce")
+        self.assertEqual(ir["members"], [])
+        self.assertTrue(all(task["assignee_id"] is None for task in ir["tasks"]))
+        ir["members"] = [{"id": name.lower(), "name": name} for name in "ABC"]
+        for task, assignee in zip(ir["tasks"], "abcabc", strict=True):
+            task["assignee_id"] = assignee
+
+        async def validate_and_solve():
+            validation = await self.client.post("/api/validate?require_assignments=true", json=ir)
+            self.assertEqual(validation.raise_for_status().json(), {"valid": True, "errors": []})
+            response = await self.client.post("/api/solve", json={"ir": ir, "scheduling_mode": "member"})
+            result = response.raise_for_status().json()["result"]
+            self.assertEqual((result["scheduling_mode"], result["status"]), ("member", "OPTIMAL"))
+            tasks = {task["id"]: task for task in result["scheduled_tasks"]}
+            self.assertEqual(set(tasks), {task["id"] for task in ir["tasks"]})
+            for task in ir["tasks"]:
+                planned = tasks[task["id"]]
+                self.assertEqual(planned["assignee_id"], task["assignee_id"])
+                self.assertEqual(planned["end_day"] - planned["start_day"], task["duration"])
+                for dependency in task["dependencies"]:
+                    self.assertLessEqual(tasks[dependency]["end_day"], planned["start_day"])
+            for member in ir["members"]:
+                assigned = sorted(
+                    (task for task in tasks.values() if task["assignee_id"] == member["id"]),
+                    key=lambda task: task["start_day"],
+                )
+                for earlier, later in zip(assigned, assigned[1:]):
+                    self.assertLessEqual(earlier["end_day"], later["start_day"])
+            return tasks
+
+        before = await validate_and_solve()
+        ir["tasks"][0]["assignee_id"] = "b"
+        ir["tasks"][0]["status"] = "Done"
+        after = await validate_and_solve()
+        self.assertEqual((before["T1"]["assignee_id"], after["T1"]["assignee_id"]), ("a", "b"))
