@@ -37,7 +37,8 @@ from project_draft import DraftTask, Extraction, ProjectDraft
 # Model ưu tiên theo thứ tự: thử model 1 trước, nếu không khả dụng thì fallback
 _PRIMARY_MODEL = "gemini-3.8-flash"
 _FALLBACK_MODEL = "gemini-3.5-flash"
-_TIMEOUT_MS = 20_000  # 20 giây – đủ cho Streamlit không bị treo giao diện
+_LEGACY_TIMEOUT_MS = 20_000  # 20 giây – đủ cho Streamlit không bị treo giao diện
+_DRAFT_TIMEOUT_MS = 45_000
 
 # Chỉ thử thêm một model khi model chính không khả dụng hoặc máy chủ gặp lỗi tạm thời.
 _FALLBACK_STATUS = {404, 500, 502, 503}
@@ -62,14 +63,16 @@ def _provider_error(error: APIError) -> GeminiDraftError:
     return GeminiDraftError(503, "Gemini hiện không xử lý được yêu cầu. Hãy thử lại sau.")
 
 
-def _generate_json(user_text: str, api_key: str, config: types.GenerateContentConfig) -> str:
+def _generate_json(
+    user_text: str, api_key: str, config: types.GenerateContentConfig, *, timeout_ms: int
+) -> str:
     if not api_key.strip():
         raise GeminiDraftError(503, "Chưa cấu hình GEMINI_API_KEY trên máy chủ.")
 
     try:
         client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=_TIMEOUT_MS, retry_options=types.HttpRetryOptions(attempts=1)),
+            http_options=types.HttpOptions(timeout=timeout_ms, retry_options=types.HttpRetryOptions(attempts=1)),
         )
         try:
             try:
@@ -258,7 +261,7 @@ def parse_project_draft(user_text: str, api_key: str) -> ProjectDraft:
         response_schema=_build_genai_schema(Extraction),
         system_instruction=_DRAFT_PROMPT,
     )
-    raw_text = _generate_json(user_text, api_key, config)
+    raw_text = _generate_json(user_text, api_key, config, timeout_ms=_DRAFT_TIMEOUT_MS)
     try:
         extraction = Extraction.model_validate_json(raw_text)
     except ValidationError as error:
@@ -381,7 +384,7 @@ def parse_kanban_prompt(user_text: str, api_key: str) -> SchedulingIR:
     )
 
     # 3. Làm sạch phản hồi & xác thực nghiêm ngặt
-    raw_text = _generate_json(user_text, api_key, config)
+    raw_text = _generate_json(user_text, api_key, config, timeout_ms=_LEGACY_TIMEOUT_MS)
     # Giữ nguyên ValidationError để giao diện nhận chi tiết lỗi cấu trúc.
     ir = SchedulingIR.model_validate_json(raw_text)
     ir.members = []
