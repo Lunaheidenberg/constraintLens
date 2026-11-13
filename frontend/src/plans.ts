@@ -1,4 +1,5 @@
-import type { CalendarFinish, ProjectMember, RescheduleResult, ScheduledTask, Task } from "./types";
+import { dateAtOffset, deadlineDaysLate, isCalendarDate } from "./calendar.ts";
+import type { CalendarFinish, CompletedTask, ProgressSnapshot, ProjectMember, RescheduleResult, ScheduledTask, Task } from "./types";
 
 export interface Plan {
   calendar: CalendarFinish;
@@ -19,15 +20,34 @@ export interface PlanState {
   accepted: Plan | null;
   acceptedRevision: number | null;
   todoConfirmed: boolean;
-  proposal: { revision: number; plan: Plan } | null;
+  confirmedProgress: ConfirmedProgress | null;
+  proposal: { revision: number; plan: Plan; source: "planning" | "progress" } | null;
   stale: boolean;
 }
 
+export interface ConfirmedProgress {
+  snapshot: ProgressSnapshot;
+  completedTasks: CompletedTask[];
+}
+
 export const initialPlans: PlanState = {
-  revision: 0, baseline: null, previous: null, accepted: null, acceptedRevision: null, todoConfirmed: false, proposal: null, stale: false,
+  revision: 0, baseline: null, previous: null, accepted: null, acceptedRevision: null, todoConfirmed: false,
+  confirmedProgress: null, proposal: null, stale: false,
 };
 
 export const hasSolution = (status: string) => status === "OPTIMAL" || status === "FEASIBLE";
+
+export function assessDeadline(plan: Plan, deadline = plan.calendar?.target_deadline_date) {
+  if (!deadline || !isCalendarDate(deadline)) return null;
+  const boundary = plan.calendar.project_finish_date_exclusive;
+  const finalDate = boundary && isCalendarDate(boundary) && boundary > "0001-01-01" ? dateAtOffset(boundary, -1) : null;
+  return finalDate ? { deadline, finalDate, daysLate: deadlineDaysLate(deadline, finalDate) } : null;
+}
+
+export function canAcceptProposal({ proposal, revision }: PlanState) {
+  if (!proposal || proposal.revision !== revision || !hasSolution(proposal.plan.status)) return false;
+  return proposal.plan.calendar?.target_deadline_date == null || assessDeadline(proposal.plan)?.daysLate === 0;
+}
 
 export type ComparisonReference = "previous" | "baseline";
 
@@ -42,7 +62,7 @@ export function comparisonPair(state: PlanState, reference: ComparisonReference 
 
 type PlanAction =
   | { type: "reset" | "inputsChanged" | "confirmTodo" | "cancel" | "accept" }
-  | { type: "propose"; revision: number; plan: Plan };
+  | { type: "propose"; revision: number; plan: Plan; confirmation?: ConfirmedProgress };
 
 export function planReducer(state: PlanState, action: PlanAction): PlanState {
   switch (action.type) {
@@ -52,14 +72,19 @@ export function planReducer(state: PlanState, action: PlanAction): PlanState {
       return { ...state, revision: state.revision + 1, todoConfirmed: false, proposal: null, stale: state.stale || state.proposal !== null };
     case "confirmTodo":
       return state.accepted ? { ...state, todoConfirmed: true } : state;
-    case "propose":
+    case "propose": {
       if (action.revision !== state.revision) return state;
       if (!hasSolution(action.plan.status)) return { ...state, proposal: null };
-      return { ...state, proposal: { revision: action.revision, plan: action.plan }, stale: false };
+      const source = action.confirmation ? "progress" : "planning";
+      return {
+        ...state, proposal: { revision: action.revision, plan: action.plan, source }, stale: false,
+        confirmedProgress: action.confirmation ?? state.confirmedProgress,
+      };
+    }
     case "cancel":
       return { ...state, proposal: null, stale: false };
     case "accept": {
-      if (!state.proposal || state.proposal.revision !== state.revision) return state;
+      if (!state.proposal || !canAcceptProposal(state)) return state;
       const plan = state.proposal.plan;
       return {
         ...state, baseline: state.baseline ?? plan, previous: state.accepted, accepted: plan,

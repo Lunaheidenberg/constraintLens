@@ -251,7 +251,7 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
 }) {
   return (
     <div className="panel overflow-hidden">
-      <div className="overflow-x-auto" role="region" aria-label="Bảng công việc" tabIndex={0}>
+      <div className="relative overflow-x-auto" role="region" aria-label="Bảng công việc" tabIndex={0}>
         <table className="data-table w-full min-w-[570px] table-fixed text-left">
           <thead className="table-head border-b border-zinc-800">
             <tr>
@@ -266,11 +266,14 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
             {tasks.map((task, index) => (
               <tr key={`${task.id}-${index}`} className="hover:bg-white/[0.025]">
                 <td className="px-3 py-2">
-                  <button className="flex items-baseline gap-2 rounded text-left hover:text-indigo-300"
-                    disabled={lockedTasks.has(task.id)} onClick={() => onEdit(index)} aria-label={`Sửa công việc ${task.id}: ${task.name}`}>
+                  <div className="flex items-baseline gap-2">
                     <span className="max-w-20 truncate font-mono text-[10px] text-zinc-400" title={task.id}>{task.id}</span>
                     <span className="min-w-0 break-words font-medium">{task.name}</span>
-                  </button>
+                  </div>
+                  {lockedTasks.has(task.id) ? <span className="helper">Đã xác nhận</span> : (
+                    <button type="button" className="text-link mt-1" onClick={() => onEdit(index)}
+                      aria-label={`Chỉnh sửa ${task.id}: ${task.name}`}>Chỉnh sửa</button>
+                  )}
                 </td>
                 <td className="max-w-28 break-words px-3 py-2 text-zinc-400">{taskCategory(task)}</td>
                 <td className="px-3 py-2 tabular-nums">{task.duration}</td>
@@ -295,11 +298,13 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
   );
 }
 
-export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], draftReview, onSave, onRemove, onClose }: {
+export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], draftReview, planningOnly, lockId, onSave, onRemove, onClose }: {
   task: T;
   tasks: T[];
   members?: ProjectMember[];
   draftReview?: { duration: boolean; dependencies: boolean };
+  planningOnly?: boolean;
+  lockId?: boolean;
   onSave: (updated: T, review: { duration: boolean; dependencies: boolean }) => void;
   onRemove?: () => void;
   onClose: () => void;
@@ -363,7 +368,7 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
         <header className="dialog-header flex items-center justify-between gap-2 px-4 py-3">
           <div>
             <p className="eyebrow">{draftReview ? "Bản nháp Gemini" : "Công việc dự án"}</p>
-            <h2 id="task-dialog-heading" className="mt-0.5 text-base font-semibold">{onRemove ? `Sửa công việc ${task.id}` : "Thêm công việc"}</h2>
+            <h2 id="task-dialog-heading" className="mt-0.5 text-base font-semibold">{onRemove || lockId ? `Sửa công việc ${task.id}` : "Thêm công việc"}</h2>
           </div>
           <button type="button" className="button icon-button" aria-label="Đóng trình chỉnh sửa" onClick={() => dialog.current?.close()}><X size={16} aria-hidden="true" /></button>
         </header>
@@ -374,7 +379,7 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="field">Mã công việc
-              <input {...validationProps("id")} required className="control w-full font-mono" value={fields.id} onChange={(event) => setFields({ ...fields, id: event.target.value })} />
+              <input {...validationProps("id")} required readOnly={lockId} className="control w-full font-mono" value={fields.id} onChange={(event) => setFields({ ...fields, id: event.target.value })} />
             </label>
             <label className="field">Thời lượng (ngày)
               <input {...validationProps("duration")} type="number" required={!draftReview} min="1" step="1" className="control w-full" value={duration}
@@ -392,13 +397,13 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
             </label>
           )}
           {!draftReview && <fieldset className="section-rule grid gap-3 min-[440px]:grid-cols-2">
-            <legend className="eyebrow pr-2">Phân công và tiến độ</legend>
+            <legend className="eyebrow pr-2">{planningOnly ? "Phân công" : "Phân công và tiến độ"}</legend>
             <label className="field">Người phụ trách
               <AssigneeSelect members={members} task={fields} onChange={(id) => setFields({ ...fields, assignee_id: id })} />
             </label>
-            <label className="field">Trạng thái
+            {!planningOnly && <label className="field">Trạng thái
               <StatusSelect task={fields} onChange={(status) => setFields({ ...fields, status })} />
-            </label>
+            </label>}
           </fieldset>}
           <fieldset className="section-rule">
             <legend className="eyebrow pr-2">Công việc tiên quyết</legend>

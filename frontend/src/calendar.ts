@@ -16,6 +16,10 @@ export function dayOffset(start: string, day: string) {
   return utcDay(day) - utcDay(start);
 }
 
+export function deadlineDaysLate(deadline: string, finalWorkDate: string) {
+  return Math.max(0, dayOffset(deadline, finalWorkDate));
+}
+
 export function dateAtOffset(start: string, offset: number) {
   return new Date((utcDay(start) + offset) * DAY_MS).toISOString().split("T")[0];
 }

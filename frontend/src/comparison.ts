@@ -1,4 +1,4 @@
-import { dateAtOffset, dayOffset, isCalendarDate } from "./calendar.ts";
+import { dateAtOffset, dayOffset, deadlineDaysLate, isCalendarDate } from "./calendar.ts";
 import { hasSolution, type Plan } from "./plans.ts";
 
 interface PlannedInterval {
@@ -103,7 +103,7 @@ function compareTask(id: string, previous: SnapshotTask | null, revised: Snapsho
 
 function deadlineStatus(deadline: string, finish: string | null) {
   if (!finish) return null;
-  const daysLate = Math.max(0, dayOffset(deadline, finish) - 1);
+  const daysLate = deadlineDaysLate(deadline, finish);
   return { daysLate, status: daysLate === 0 ? "on_time" as const : "late" as const };
 }
 
@@ -119,8 +119,8 @@ export function comparePlans(previous: Plan, revised: Plan) {
   // Evaluate both finishes against the revised snapshot's target, so the change
   // in lateness measures the schedule shift against a single inclusive deadline.
   const target = calendarDate(revised.calendar.target_deadline_date);
-  const previousDeadline = target ? deadlineStatus(target, previousFinish.boundary) : null;
-  const revisedDeadline = target ? deadlineStatus(target, revisedFinish.boundary) : null;
+  const previousDeadline = target ? deadlineStatus(target, previousFinish.finalDate) : null;
+  const revisedDeadline = target ? deadlineStatus(target, revisedFinish.finalDate) : null;
   return {
     previousFinish,
     revisedFinish,

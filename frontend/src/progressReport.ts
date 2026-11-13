@@ -2,6 +2,28 @@ import { dayOffset, isCalendarDate, parseDateInput } from "./calendar.ts";
 import type { Plan } from "./plans";
 import type { CompletedTask, ProgressSnapshot, Task } from "./types";
 
+export function progressFromPlan(plan: Plan | null): ProgressSnapshot | null {
+  if (!plan?.recovery) return null;
+  const completions = plan.recovery.completed_tasks.map(({ id, actual_finish_date }) => [id, { actual_finish_date }] as const);
+  const doing = new Set(plan.tasks.filter((task) => task.status === "Doing").map((task) => task.id));
+  const remaining = plan.scheduledTasks.filter((task) => doing.has(task.id))
+    .map(({ id, duration }) => [id, { remaining_duration: duration }] as const);
+  return {
+    progress_as_of_date: plan.recovery.progress_as_of_date,
+    task_progress: Object.fromEntries([...completions, ...remaining]),
+  };
+}
+
+export function matchesReportedStatuses(tasks: Task[], snapshot: ProgressSnapshot | null) {
+  const reports = new Map(Object.entries(snapshot?.task_progress ?? {}));
+  return tasks.every(({ id, status }) => {
+    const entry = reports.get(id);
+    reports.delete(id);
+    const reported = !entry ? "To Do" : "actual_finish_date" in entry ? "Done" : "Doing";
+    return (status ?? "To Do") === reported;
+  }) && reports.size === 0;
+}
+
 export function plannedRemainingDays(accepted: Plan | null, reportingDate: string) {
   const remaining = new Map<string, number>();
   if (!accepted || !isCalendarDate(reportingDate) || reportingDate === "9999-12-31") return remaining;

@@ -1,5 +1,5 @@
 import { dateAtOffset, dayOffset, formatDate } from "./calendar";
-import type { Plan } from "./plans";
+import { assessDeadline, type Plan } from "./plans";
 import type { ProjectMember } from "./types";
 import { taskCategory } from "./ProjectEditor";
 
@@ -15,13 +15,13 @@ export function Schedule({ plan, members, deadline }: {
   const finish = calendar.project_finish_day_exclusive;
   const replanningDay = recovery?.replanning_start_day ?? null;
   // Both reference lines show boundaries. The deadline line is after the inclusive deadline date.
-  const deadlineBoundary = deadline === null ? null : dayOffset(start, deadline) + 1;
+  const deadlineBoundary = deadline === null || deadline < start ? null : dayOffset(start, deadline) + 1;
   const endDay = Math.max(1, finish ?? 0, deadlineBoundary ?? 0, (replanningDay ?? 0) + 1);
   const { ticks, width, position } = timelineAxis(start, endDay);
   const taskById = new Map(plan.tasks.map((task) => [task.id, task]));
   const memberById = new Map([...plan.members, ...members].map((member) => [member.id, member.name]));
   const queueWait = scheduledTasks.reduce((total, task) => total + task.queue_wait_days, 0);
-  const deadlineDelta = deadlineBoundary === null || finish === null ? null : deadlineBoundary - finish;
+  const daysLate = assessDeadline(plan, deadline)?.daysLate;
   const completionLabel = recovery?.remaining_horizon_days === 0 ? "Hoàn thành thực tế" : "Ngày làm việc cuối";
 
   const metrics = [
@@ -29,7 +29,7 @@ export function Schedule({ plan, members, deadline }: {
     ["Thời gian dự án", finish === null ? "Chưa rõ" : `${finish} ngày`],
     ["Công việc trong lịch", plan.tasks.length],
     ["Trạng thái CP-SAT", plan.status],
-    ["Hạn mục tiêu", deadlineDelta === null ? "Chưa đặt" : deadlineDelta < 0 ? `Trễ ${-deadlineDelta} ngày` : "Đúng hạn"],
+    ["Hạn mục tiêu", deadline === null ? "Chưa đặt" : daysLate === undefined ? "Chưa rõ" : daysLate ? `Trễ ${daysLate} ngày` : "Đúng hạn"],
   ];
   const grid = <>
     {ticks.slice(1).map(({ day }) => (
@@ -47,8 +47,8 @@ export function Schedule({ plan, members, deadline }: {
         {metrics.map(([label, value]) => (
           <div key={label}>
             <dt>{label}</dt>
-            <dd className={`text-sm font-semibold tabular-nums ${label === "Hạn mục tiêu" && deadlineDelta !== null
-              ? deadlineDelta < 0 ? "text-amber-200" : "text-emerald-300" : ""}`}>{value}</dd>
+            <dd className={`text-sm font-semibold tabular-nums ${label === "Hạn mục tiêu" && daysLate !== undefined
+              ? daysLate ? "text-amber-200" : "text-emerald-300" : ""}`}>{value}</dd>
           </div>
         ))}
       </dl>
@@ -62,7 +62,7 @@ export function Schedule({ plan, members, deadline }: {
         <li className="flex items-center gap-1.5"><span className="gantt-bar h-2.5 w-4 rounded-sm border" aria-hidden="true" /> Công việc dự kiến</li>
         {queueWait > 0 && <li className="flex items-center gap-1.5"><span className="gantt-wait h-2.5 w-4 rounded-sm" aria-hidden="true" /> Thời gian chờ</li>}
         {!!recovery?.completed_tasks.length && <li className="flex items-center gap-1.5"><span className="mx-1 size-2 rotate-45 bg-emerald-400" aria-hidden="true" /> Hoàn thành thực tế</li>}
-        {deadline !== null && <li className="flex items-center gap-1.5"><span className="mx-1 h-3 border-l border-dashed border-amber-400" aria-hidden="true" /> Hết hạn ngày {formatDate(deadline)}</li>}
+        {deadlineBoundary !== null && deadline !== null && <li className="flex items-center gap-1.5"><span className="mx-1 h-3 border-l border-dashed border-amber-400" aria-hidden="true" /> Hết hạn ngày {formatDate(deadline)}</li>}
         {recovery?.replanning_start_date && <li className="flex items-center gap-1.5"><span className="mx-1 h-3 border-l-2 border-sky-400" aria-hidden="true" />
           Lập lại lịch từ {formatDate(recovery.replanning_start_date)} · Tiến độ đến hết {formatDate(recovery.progress_as_of_date)}
         </li>}
