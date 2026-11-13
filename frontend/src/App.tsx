@@ -7,11 +7,12 @@ import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
 import { hasSolution, initialPlans, planReducer } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
+import { collectTaskProgress } from "./progressReport";
 import { todoTasksDueForReview } from "./progressReview";
 import { prepareScheduleResult } from "./schedulingFeedback";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
-import type { ParseRequest, PresetsMap, ProjectCalendar, ProjectDraft, ProgressSnapshot, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse } from "./types";
+import type { ParseRequest, PresetsMap, ProjectCalendar, ProjectDraft, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse } from "./types";
 
 const API_BASE = "http://localhost:8000";
 
@@ -365,20 +366,7 @@ export default function App() {
   async function requestRecovery(solve: boolean) {
     if (activeRequest.current || !accepted || localErrors.length || !validReportingDate) return;
     if (solve && todoReview.length > 0 && !todoConfirmed) return;
-    const taskProgress: [string, ProgressSnapshot["task_progress"][string]][] = [];
-    const errors: string[] = [];
-    for (const task of ir.tasks) {
-      const value = entries.get(task.id);
-      if (task.status === "Doing" && value) {
-        const duration = Number(value);
-        if (!Number.isSafeInteger(duration) || duration < 1) errors.push(`Nhập số ngày còn lại là số nguyên dương cho '${task.id}'.`);
-        else taskProgress.push([task.id, { remaining_duration: duration }]);
-      } else if (task.status === "Done") {
-        const finish = completed.get(task.id)?.actual_finish_date ?? parseDateInput(value ?? "");
-        if (finish) taskProgress.push([task.id, { actual_finish_date: finish }]);
-        else if (value?.trim()) errors.push(`Nhập ngày hoàn thành thực tế của ${task.id} theo định dạng DD/MM/YYYY.`);
-      }
-    }
+    const { taskProgress, errors } = collectTaskProgress(ir.tasks, entries, completed);
     const report = (message: string, errors: string[] = []) => setProgressFeedback({ message, errors });
     if (errors.length) {
       report("Sửa thông tin tiến độ", errors);
@@ -392,7 +380,7 @@ export default function App() {
     setPhase(solve ? "rescheduling" : "checkingProgress");
     setProgressFeedback(null);
     if (solve && proposal) dispatchPlan({ type: "cancel" });
-    const payload: RescheduleRequest = { ir, calendar, progress: { progress_as_of_date: asOf, task_progress: Object.fromEntries(taskProgress) } };
+    const payload: RescheduleRequest = { ir, calendar, progress: { progress_as_of_date: asOf, task_progress: taskProgress } };
     try {
       if (!solve) {
         const validation = await post<ValidateResponse>("/api/reschedule/validate", payload, signal);
@@ -781,7 +769,7 @@ export default function App() {
                 onMove={(index, status) => updateTask(index, { status }, false)} />
             </section>
             <ProgressEditor key={instance} calendar={calendar} tasks={ir.tasks} asOf={asOf} asOfInput={asOfInput} entries={entries} completed={completed}
-              hasAcceptedPlan={!!accepted} minimumAsOf={minimumAsOf} canRequest={!phase && !localErrors.length && validReportingDate}
+              acceptedPlan={accepted} minimumAsOf={minimumAsOf} canRequest={!phase && !localErrors.length && validReportingDate}
               projectNeedsCorrections={localErrors.length > 0} onOpenPlanning={() => goTo("planning", "solve-heading")}
               phase={progressPhase} pendingMessage={progressPhase ? REQUEST_STATUS[progressPhase] : ""}
               feedback={progressFeedback} hasProposal={!!proposal?.plan.recovery}
