@@ -10,3 +10,5 @@
 ## React planning workflow
 
 Load a preset or create a Gemini draft, add members, and choose a member for each task. React validates the project with `require_assignments=true` and sends the confirmed input with `scheduling_mode: "member"`. Gantt shows planned intervals, and the Kanban board tracks progress independently. The legacy Streamlit workflow and API compatibility fields remain available.
+
+The FastAPI draft endpoint reads `GEMINI_API_KEY` on the server. Set the `GEMINI_DRAFT_MODEL` environment variable to override `gemini-3.8-flash`. Fallback is disabled by default for drafts. Set `GEMINI_DRAFT_FALLBACK_MODEL` only after confirming the model is available to your Gemini project and accepting that a second generation request can incur charges. The endpoint makes at most one request per model and uses the remaining request timeout for fallback.

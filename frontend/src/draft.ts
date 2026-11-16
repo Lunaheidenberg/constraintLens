@@ -2,6 +2,32 @@ import type { DraftTask, ProjectDraft, Task } from "./types.ts";
 
 export type EditableTask = Omit<Task, "duration"> & { duration: number | null };
 
+export async function generateProjectDraft(
+  request: { current: AbortController | null },
+  generate: (signal: AbortSignal) => Promise<ProjectDraft>,
+  updates: {
+    pending: (pending: boolean) => void;
+    ready: (draft: ProjectDraft) => void;
+    failed: (error: unknown) => void;
+  },
+) {
+  if (request.current) return;
+  const controller = new AbortController();
+  request.current = controller;
+  try {
+    updates.pending(true);
+    const draft = await generate(controller.signal);
+    if (!controller.signal.aborted) updates.ready(draft);
+  } catch (error) {
+    if (!controller.signal.aborted) updates.failed(error);
+  } finally {
+    if (request.current === controller) {
+      request.current = null;
+      if (!controller.signal.aborted) updates.pending(false);
+    }
+  }
+}
+
 export function draftTaskForEditor(task: DraftTask): EditableTask {
   return {
     id: task.id, name: task.name, category: task.category, kanban_stage: task.category,

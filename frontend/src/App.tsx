@@ -3,7 +3,7 @@ import { ArrowDown, ArrowRight, CalendarDays, ChartGantt, CircleHelp, Layers3, L
 import { formatDate, isCalendarDate, parseDateInput } from "./calendar";
 import { DateField } from "./DateField";
 import { DeadlineWarning } from "./DeadlineWarning";
-import { draftReady } from "./draft";
+import { draftReady, generateProjectDraft } from "./draft";
 import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
 import { assessDeadline, canAcceptProposal, hasSolution, initialPlans, planReducer } from "./plans";
@@ -171,6 +171,7 @@ export default function App() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [progressFeedback, setProgressFeedback] = useState<Feedback | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
+  const draftRequest = useRef<AbortController | null>(null);
   const [workspace, setWorkspace] = useState<Workspace>("setup");
   const focusTarget = useRef<string | null>(null);
 
@@ -226,7 +227,10 @@ export default function App() {
     return () => controller.abort();
   }, [presetRequest]);
 
-  useEffect(() => () => activeRequest.current?.abort(), []);
+  useEffect(() => () => {
+    activeRequest.current?.abort();
+    draftRequest.current?.abort();
+  }, []);
 
   function cancelScheduling() {
     activeRequest.current?.abort();
@@ -283,19 +287,19 @@ export default function App() {
   }
 
   async function parseProject() {
-    if (draftPhase || !prompt.trim()) return;
-    setDraftPhase("generating");
-    setParseError("");
-    try {
-      const payload: ParseRequest = { prompt: prompt.trim() };
-      const draft = await post<ProjectDraft>("/api/parse/draft", payload);
-      setPendingDraft(draft);
-      setDraftError("");
-    } catch (error) {
-      setParseError(errorMessage(error));
-    } finally {
-      setDraftPhase(null);
-    }
+    const payload: ParseRequest = { prompt: prompt.trim() };
+    if (draftPhase || !payload.prompt) return;
+    await generateProjectDraft(draftRequest, (signal) => post<ProjectDraft>("/api/parse/draft", payload, signal), {
+      pending: (pending) => {
+        setDraftPhase(pending ? "generating" : null);
+        if (pending) setParseError("");
+      },
+      ready: (draft) => {
+        setPendingDraft(draft);
+        setDraftError("");
+      },
+      failed: (error) => setParseError(errorMessage(error)),
+    });
   }
 
   async function confirmDraft() {
@@ -650,6 +654,7 @@ export default function App() {
                 <form className="setup-description" onSubmit={(event) => { event.preventDefault(); void parseProject(); }}>
                   <label className="field">Mô tả dự án
                     <textarea className="control w-full resize-y leading-relaxed" rows={4} value={prompt} maxLength={12000}
+                      readOnly={draftPhase === "generating"}
                       aria-describedby="description-help"
                       placeholder="Ví dụ: Thiết kế giao diện trong 3 ngày, sau đó lập trình chức năng đăng nhập."
                       onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
