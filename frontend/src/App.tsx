@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from "react";
-import { ArrowDown, ArrowRight, CalendarDays, ChartGantt, CircleHelp, Layers3, LayoutGrid, ListTodo, LoaderCircle, Play, Plus, Settings2, Sparkles, UsersRound } from "lucide-react";
+import { ArrowDown, ArrowRight, CalendarDays, ChartGantt, CircleHelp, Info, Layers3, LayoutGrid, ListTodo, LoaderCircle, Play, Plus, Settings2, Sparkles, UsersRound } from "lucide-react";
 import { formatDate, isCalendarDate, parseDateInput } from "./calendar";
 import { DateField } from "./DateField";
 import { DeadlineWarning } from "./DeadlineWarning";
@@ -9,7 +9,7 @@ import { PlanComparison } from "./PlanComparison";
 import { assessDeadline, canAcceptProposal, hasSolution, initialPlans, planReducer } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
 import { collectTaskProgress, matchesReportedStatuses, progressFromPlan } from "./progressReport";
-import { todoTasksDueForReview } from "./progressReview";
+import { hasUnscheduledStatusChanges, todoTasksDueForReview } from "./progressReview";
 import { prepareScheduleResult } from "./schedulingFeedback";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
@@ -209,6 +209,7 @@ export default function App() {
   const acceptedAssessment = accepted ? assessDeadline(accepted, acceptedDeadline) : null;
   const outdated = accepted !== null && (accepted.scheduleRevision !== scheduleRevision ||
     accepted.calendar.project_start_date !== calendar.project_start_date);
+  const statusChanges = hasUnscheduledStatusChanges(accepted, ir.tasks);
   const completed = new Map((plans.confirmedProgress?.completedTasks ?? accepted?.recovery?.completed_tasks ?? []).map((task) => [task.id, task]));
   const lockedTasks = new Set(completed.keys());
   const confirmedAsOf = planningProgress?.progress_as_of_date ?? "";
@@ -582,6 +583,15 @@ export default function App() {
   const currentFeedback = workspace === "planning" ? feedback : workspace === "recovery" ? progressFeedback : null;
   const announcement = busy ? REQUEST_STATUS[busy] : currentFeedback && !currentFeedback.errors.length ? currentFeedback.message
     : workspace === "setup" && pendingDraft && !parseError ? "Bản nháp Gemini đã sẵn sàng để xem lại." : "";
+  const progressNotice = statusChanges && (
+    <div className="notice notice-info">
+      <Info size={16} aria-hidden="true" />
+      <p role="status">Tiến độ đã thay đổi. Lịch hiện tại chưa phản ánh những cập nhật mới nhất.</p>
+      <button type="button" className="text-link" onClick={() => goTo("recovery", "progress-heading")}>
+        Đến báo cáo tiến độ <ArrowRight size={14} aria-hidden="true" />
+      </button>
+    </div>
+  );
   return (
     <div className="app-shell" onChangeCapture={() => { editVersion.current += 1; }}>
       <a className="skip-link" href="#project-heading">Đến nội dung dự án</a>
@@ -794,6 +804,7 @@ export default function App() {
                   </div>
                   {!!acceptedAssessment?.daysLate && <DeadlineWarning assessment={acceptedAssessment} accepted onRevise={revisePlan} />}
                   {outdated && <p className="notice warning">Dữ liệu dự án đã thay đổi. Chọn Lập lịch lại để xem lịch cập nhật.</p>}
+                  {progressNotice}
                   <Schedule plan={accepted} members={members} deadline={acceptedDeadline ?? null} />
                 </section>
               ) : !proposal && (
@@ -818,6 +829,7 @@ export default function App() {
                 <SectionTitle id="kanban-heading" icon={LayoutGrid}>Bảng Kanban</SectionTitle>
                 <p className="helper">Kéo thẻ hoặc chọn Di chuyển để cập nhật trạng thái.</p>
               </div>
+              {progressNotice}
               <Kanban key={instance} tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor}
                 onMove={(index, status) => updateTask(index, { status }, false)} />
             </section>

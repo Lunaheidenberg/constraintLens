@@ -99,13 +99,18 @@ export function Schedule({ plan, members, deadline }: {
             const category = plannedTask ? taskCategory(plannedTask) : task.kanban_stage;
             const member = memberById.get(task.assignee_id ?? "") ?? "Chưa phân công";
             // Solver intervals are [start_day, end_day). Show the last occupied calendar date.
-            const timing = `${formatDate(dateAtOffset(start, task.start_day))} – ${formatDate(dateAtOffset(start, task.end_day - 1))} · ${task.duration} ngày`;
+            const dates = `${formatDate(dateAtOffset(start, task.start_day))} – ${formatDate(dateAtOffset(start, task.end_day - 1))}`;
+            const duration = recovery && plannedTask?.status === "Doing"
+              ? `Còn ${task.duration} ngày · Ước tính ban đầu: ${plannedTask.duration} ngày`
+              : `Dự kiến ${task.duration} ngày`;
+            const timing = `${dates} · ${duration}`;
             return (
               <div key={task.id} className="gantt-row">
                 <div className="gantt-label px-3 py-2 text-xs">
                   <div className="font-semibold"><span className="mr-1.5 font-mono font-normal text-zinc-400">{task.id}</span>{task.name}</div>
                   <div className="mt-0.5 break-words text-zinc-400">{member} · {category}</div>
-                  <div className="text-zinc-400">{timing}</div>
+                  <div className="text-zinc-400">{dates}</div>
+                  <div className="text-zinc-300">{duration}</div>
                 </div>
                 <div className="gantt-lane" role="img" tabIndex={0}
                   aria-label={`${task.name} · ${member} · ${timing}${task.queue_wait_days ? ` · Chờ ${task.queue_wait_days} ngày` : ""}`}>

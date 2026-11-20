@@ -252,13 +252,14 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
   return (
     <div className="panel overflow-hidden">
       <div className="relative overflow-x-auto" role="region" aria-label="Bảng công việc" tabIndex={0}>
-        <table className="data-table w-full min-w-[570px] table-fixed text-left">
+        <table className="data-table w-full min-w-[680px] table-fixed text-left">
           <thead className="table-head border-b border-zinc-800">
             <tr>
               <th scope="col" className="px-3 py-2.5">Công việc</th>
-              <th scope="col" className="w-[16%] px-3 py-2.5">Nhóm</th>
-              <th scope="col" className="w-20 px-3 py-2.5">Số ngày</th>
-              <th scope="col" className="w-[27%] px-3 py-2.5">Người phụ trách</th>
+              <th scope="col" className="w-[13%] px-3 py-2.5">Nhóm</th>
+              <th scope="col" className="w-20 px-3 py-2.5" title="Ước tính ban đầu">Số ngày</th>
+              <th scope="col" className="w-[17%] px-3 py-2.5">Tiên quyết</th>
+              <th scope="col" className="w-[25%] px-3 py-2.5">Người phụ trách</th>
               <th scope="col" className="w-24 px-3 py-2.5">Trạng thái</th>
             </tr>
           </thead>
@@ -277,6 +278,15 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
                 </td>
                 <td className="max-w-28 break-words px-3 py-2 text-zinc-400">{taskCategory(task)}</td>
                 <td className="px-3 py-2 tabular-nums">{task.duration}</td>
+                <td className="px-3 py-2">
+                  {task.dependencies.length ? (
+                    <ul className="flex flex-wrap gap-1" role="list" aria-label={`Công việc tiên quyết của ${task.id}`}>
+                      {task.dependencies.map((id) => <li key={id} className="badge font-mono">{id}</li>)}
+                    </ul>
+                  ) : (
+                    <span className="helper"><span aria-hidden="true">—</span><span className="sr-only">Không có công việc tiên quyết</span></span>
+                  )}
+                </td>
                 <td className="w-40 px-3 py-2">
                   <AssigneeSelect task={task} members={members} disabled={lockedTasks.has(task.id)} onChange={(id) => onAssign(index, id)} />
                 </td>

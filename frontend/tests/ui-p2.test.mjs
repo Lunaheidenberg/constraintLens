@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dateAtOffset, formatDate, parseDateInput } from "../src/calendar.ts";
 import { initialPlans, planReducer } from "../src/plans.ts";
-import { todoTasksDueForReview } from "../src/progressReview.ts";
+import { hasUnscheduledStatusChanges, todoTasksDueForReview } from "../src/progressReview.ts";
 import { prepareScheduleResult } from "../src/schedulingFeedback.ts";
 
 test("D1–D5: dates display day first and round-trip to ISO, including year boundaries and leap day", () => {
@@ -93,6 +93,24 @@ test("P1–P5: only To Do tasks starting on or before the report date in the acc
 test("P7: a Kanban status change removes the task from review", () => {
   const updated = [{ ...tasks[0], status: "Doing" }, ...tasks.slice(1)];
   assert.deepEqual(todoTasksDueForReview(accepted, updated, "2026-11-17").map(({ id }) => id), ["T5"]);
+});
+
+test("status changes are measured against the accepted snapshot until another plan is accepted", () => {
+  const planned = [{ id: "T4" }, { id: "T7", status: "Doing" }];
+  const current = [{ id: "T4", status: "To Do" }, planned[1]];
+  const changed = [{ id: "T4", status: "Doing" }, planned[1]];
+  const propose = (state, tasks) => planReducer(state, {
+    type: "propose", revision: state.revision, plan: { status: "OPTIMAL", tasks },
+  });
+  const active = planReducer(propose(initialPlans, planned), { type: "accept" });
+  const preview = propose(planReducer(active, { type: "inputsChanged" }), changed);
+
+  assert.equal(hasUnscheduledStatusChanges(null, changed), false);
+  assert.equal(hasUnscheduledStatusChanges(active.accepted, [...current, { id: "new", status: "Doing" }]), false);
+  assert.equal(hasUnscheduledStatusChanges(preview.accepted, changed), true);
+  assert.equal(hasUnscheduledStatusChanges(planReducer(preview, { type: "cancel" }).accepted, changed), true);
+  assert.equal(hasUnscheduledStatusChanges(preview.accepted, current), false);
+  assert.equal(hasUnscheduledStatusChanges(planReducer(preview, { type: "accept" }).accepted, changed), false);
 });
 
 test("P6, P8–P10: confirmation survives proposal cancellation and resets on input changes or accepting a plan", () => {
