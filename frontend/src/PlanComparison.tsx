@@ -104,7 +104,7 @@ function ComparisonDetails({ comparison, labels }: {
         <div className="flex flex-wrap gap-1" role="group" aria-label="Lọc thay đổi công việc">
           {(Object.keys(FILTERS) as Filter[]).map((value) => (
             <button key={value} type="button" aria-pressed={filter === value}
-              className="button aria-pressed:border-indigo-400/70 aria-pressed:text-indigo-200"
+              className="button aria-pressed:border-[var(--accent-border)] aria-pressed:text-[var(--accent)]"
               onClick={() => setFilter(value)}>{FILTERS[value]}</button>
           ))}
         </div>

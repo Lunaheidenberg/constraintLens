@@ -8,16 +8,16 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: "#09090b",
-        surface: "#121215",
-        "surface-card": "#18181b",
-        "surface-hover": "#222226",
-        border: "#27272a",
-        "border-hover": "#3f3f46",
+        background: "var(--canvas)",
+        surface: "var(--inset)",
+        "surface-card": "var(--panel)",
+        "surface-hover": "var(--raised-hover)",
+        border: "var(--line)",
+        "border-hover": "var(--line-strong)",
         primary: {
-          DEFAULT: "#6366f1",
-          hover: "#4f46e5",
-          light: "#818cf8",
+          DEFAULT: "var(--accent-fill)",
+          hover: "var(--accent-hover)",
+          light: "var(--accent)",
         },
       },
       fontFamily: {

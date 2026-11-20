@@ -623,25 +623,27 @@ export default function App() {
                 <h2 id="setup-heading" tabIndex={-1}>Thiết lập dự án</h2>
                 <p>Chọn điểm bắt đầu, thiết lập ngày và thêm người phụ trách.</p>
               </div>
-              <button className="button" onClick={() => goTo("planning")}>Đến kế hoạch <ArrowRight size={15} aria-hidden="true" /></button>
+              <button className="button primary" onClick={() => goTo("planning")}>Đến kế hoạch <ArrowRight size={15} aria-hidden="true" /></button>
             </div>
             <div className="setup-grid">
               <section className="setup-source" aria-labelledby="source-heading">
-                <SectionTitle id="source-heading" icon={ListTodo}>Khởi tạo công việc</SectionTitle>
-                <div className="setup-source-options">
-                  <label className="field">Kịch bản mẫu
-                    <select className="control w-full" value={selectedPreset} onChange={(event) => {
-                      const key = event.target.value;
-                      if (confirmReplace()) loadProject(presets[key], key);
-                    }}>
-                      <option value="" disabled>Chọn kịch bản mẫu</option>
-                      {Object.keys(presets).map((name) => <option key={name}>{name}</option>)}
-                    </select>
-                  </label>
+                <div className="section-bar">
+                  <SectionTitle id="source-heading" icon={ListTodo}>Khởi tạo công việc</SectionTitle>
                   <button className="button" aria-label="Thêm công việc thủ công" onClick={() => openTaskEditor("new")}>
                     <Plus size={15} aria-hidden="true" /> Thêm thủ công
                   </button>
                 </div>
+                <label className="field">Kịch bản mẫu
+                  <select className="control w-full" value={selectedPreset} onChange={(event) => {
+                    const key = event.target.value;
+                    if (confirmReplace()) {
+                      loadProject(presets[key], key);
+                    }
+                  }}>
+                    <option value="" disabled>Chọn kịch bản mẫu</option>
+                    {Object.keys(presets).map((name) => <option key={name}>{name}</option>)}
+                  </select>
+                </label>
                 {presetError && (
                   <div role="alert" className="notice error">
                     <p>{presetError}</p>

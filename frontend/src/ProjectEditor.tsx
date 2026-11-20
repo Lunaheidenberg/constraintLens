@@ -7,7 +7,7 @@ import type { KanbanStatus, ProjectMember, Task } from "./types";
 const STATUSES: KanbanStatus[] = ["To Do", "Doing", "Done"];
 const STATUS_COLORS: Record<KanbanStatus, string> = {
   "To Do": "border-zinc-500",
-  Doing: "border-indigo-400 bg-indigo-400/30",
+  Doing: "border-[var(--accent)] bg-[var(--accent-soft)]",
   Done: "border-emerald-400 bg-emerald-400",
 };
 
@@ -204,7 +204,7 @@ export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskList
                             <GripVertical size={15} className="pointer-events-none" aria-hidden="true" />
                           </span>}
                           {locked ? <span className="min-w-0 flex-1 break-words text-sm font-semibold leading-snug">{task.name}</span>
-                            : <button className="min-w-0 flex-1 break-words rounded text-left text-sm font-semibold leading-snug hover:text-indigo-300"
+                            : <button className="min-w-0 flex-1 break-words rounded text-left text-sm font-semibold leading-snug hover:text-[var(--accent)]"
                               onClick={() => onEdit(index)} aria-label={`Sửa công việc ${task.id} trên Kanban: ${task.name}`}>{task.name}</button>}
                           <span className="max-w-[4rem] truncate font-mono text-[11px] text-zinc-400" title={task.id}>{task.id}</span>
                         </div>
@@ -411,7 +411,7 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
               <div className="mt-1 max-h-32 space-y-1 overflow-y-auto rounded-md border border-zinc-800 p-2">
                 {[...dependencyOptions].map((id) => (
                   <label key={id} className="flex items-start gap-2 rounded p-1 text-xs hover:bg-zinc-800">
-                    <input type="checkbox" className="mt-0.5 accent-indigo-500" checked={fields.dependencies.includes(id)}
+                    <input type="checkbox" className="mt-0.5" checked={fields.dependencies.includes(id)}
                       onChange={(event) => setFields({ ...fields, dependencies: event.target.checked
                         ? [...fields.dependencies, id] : fields.dependencies.filter((item) => item !== id) })} />
                     <span className="min-w-0 break-words"><span className="font-mono text-zinc-400">{id}</span> {dependencies.get(id) ?? "Phụ thuộc không hợp lệ"}</span>
