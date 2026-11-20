@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Clock3, GripVertical, Link2, Pencil, Plus, Trash2, UserRound, UsersRound, X } from "lucide-react";
+import { HelpButton } from "./ApplicationGuide";
 import type { EditableTask } from "./draft";
 import type { KanbanStatus, ProjectMember, Task } from "./types";
 
@@ -375,12 +376,15 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
   return (
     <dialog ref={dialog} aria-labelledby="task-dialog-heading" onClose={onClose} className="task-dialog panel">
       <form noValidate onSubmit={save} onChange={() => { if (error) setError(null); }}>
-        <header className="dialog-header flex items-center justify-between gap-2 px-4 py-3">
+        <header className="dialog-header flex flex-wrap items-center justify-between gap-2 px-4 py-3">
           <div>
             <p className="eyebrow">{draftReview ? "Bản nháp Gemini" : "Công việc dự án"}</p>
             <h2 id="task-dialog-heading" className="mt-0.5 text-base font-semibold">{onRemove || lockId ? `Sửa công việc ${task.id}` : "Thêm công việc"}</h2>
           </div>
-          <button type="button" className="button icon-button" aria-label="Đóng trình chỉnh sửa" onClick={() => dialog.current?.close()}><X size={16} aria-hidden="true" /></button>
+          <div className="flex items-center gap-2">
+            <HelpButton />
+            <button type="button" className="button icon-button" aria-label="Đóng trình chỉnh sửa" onClick={() => dialog.current?.close()}><X size={16} aria-hidden="true" /></button>
+          </div>
         </header>
         <div className="space-y-3 p-4">
           <label className="field">Tên công việc

@@ -6,6 +6,8 @@ Cung cấp các API:
   - GET  /api/presets  : Danh sách các kịch bản mẫu (DEMO_SCENARIOS)
   - POST /api/parse    : Phân tích mô tả thành SchedulingIR cho các client cũ
   - POST /api/parse/draft, /api/parse/confirm : Tạo và xác nhận bản nháp Gemini
+  - POST /api/planning/clarify, /api/planning/draft : Làm rõ mục tiêu và đề xuất kế hoạch
+  - GET /api/help/topics, POST /api/help/ask : Tra cứu hướng dẫn sử dụng
   - POST /api/validate : Kiểm tra tính toàn vẹn và chu trình đồ thị (DAG Cycle)
   - POST /api/solve    : Giải RCPSP bằng CP-SAT và phân tích What-If Counterfactual
   - POST /api/reschedule : Lập lại lịch theo tiến độ cuối ngày đã xác nhận
@@ -15,12 +17,16 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from application_guide import create_help_router
 from models import KanbanConfig, ProgressSnapshot, SchedulingIR, Task
-from parser import GeminiDraftError, parse_kanban_prompt, parse_project_draft
+from parser import GeminiDraftError, _draft_model, clarify_project, parse_kanban_prompt, parse_project_draft, propose_project_plan
+from planning_draft import ClarificationResult, ClarifyPlanningRequest, GeneratePlanningRequest, PlanningResult
 from project_calendar import CalendarFinish, ProjectCalendar, calendar_finish, calendar_range_errors
 from project_draft import ProjectDraft
 from solver import RescheduleResult, ScheduleResult, SchedulingMode, reschedule_project, solve_schedule
@@ -266,6 +272,41 @@ def confirm_draft(draft: ProjectDraft):
     if ir is None:
         raise HTTPException(status_code=422, detail="\n".join(errors))
     return ir
+
+
+class PlanningRoute(APIRoute):
+    def get_route_handler(self):
+        handle = super().get_route_handler()
+
+        async def handle_planning(request: Request):
+            try:
+                return await handle(request)
+            except RequestValidationError:
+                # FastAPI có thể đưa dữ liệu đầu vào vào phản hồi 422 mặc định.
+                raise HTTPException(status_code=422, detail="Mô tả hoặc câu trả lời làm rõ không hợp lệ.") from None
+            except GeminiDraftError as error:
+                raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+            except OSError:
+                raise HTTPException(status_code=503, detail="Không đọc được cấu hình Gemini trên máy chủ.") from None
+
+        return handle_planning
+
+
+planning_router = APIRouter(prefix="/api/planning", route_class=PlanningRoute)
+
+
+@planning_router.post("/clarify", response_model=ClarificationResult)
+async def clarify_planning(payload: ClarifyPlanningRequest):
+    return await clarify_project(payload.prompt, _get_gemini_api_key())
+
+
+@planning_router.post("/draft", response_model=PlanningResult)
+async def generate_planning_draft(payload: GeneratePlanningRequest):
+    return await propose_project_plan(payload, _get_gemini_api_key())
+
+
+app.include_router(planning_router)
+app.include_router(create_help_router(lambda: _get_gemini_api_key(), _draft_model))
 
 
 @app.post("/api/validate", response_model=ValidateResponse)

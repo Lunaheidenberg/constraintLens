@@ -2,14 +2,16 @@ import type { DraftTask, ProjectDraft, Task } from "./types.ts";
 
 export type EditableTask = Omit<Task, "duration"> & { duration: number | null };
 
-export async function generateProjectDraft(
+export interface DraftRequestUpdates<Result> {
+  pending: (pending: boolean) => void;
+  ready: (draft: Result) => void;
+  failed: (error: unknown) => void;
+}
+
+export async function generateProjectDraft<Result>(
   request: { current: AbortController | null },
-  generate: (signal: AbortSignal) => Promise<ProjectDraft>,
-  updates: {
-    pending: (pending: boolean) => void;
-    ready: (draft: ProjectDraft) => void;
-    failed: (error: unknown) => void;
-  },
+  generate: (signal: AbortSignal) => Promise<Result>,
+  updates: DraftRequestUpdates<Result>,
 ) {
   if (request.current) return;
   const controller = new AbortController();

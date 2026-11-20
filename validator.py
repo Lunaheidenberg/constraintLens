@@ -111,21 +111,36 @@ def validate_ir(
     if not require_assignments:
         errors.extend(_validate_legacy_kanban(ir, tasks))
 
+    errors.extend(validate_dependencies([(task.id, task.dependencies) for task in tasks]))
+
+    # =========================================================================
+    # Kết luận & Xử lý raise_on_error
+    # =========================================================================
+    if raise_on_error and errors:
+        raise SchedulingValidationError(errors)
+
+    return errors
+
+
+def validate_dependencies(task_dependencies: list[tuple[str, list[str] | None]]) -> list[str]:
+    """Kiểm tra các cạnh đã biết, kể cả khi bản nháp còn thiếu tiên quyết."""
+    errors: list[str] = []
+
     # =========================================================================
     # CHỐT CHẶN 3: Kiểm tra Tham chiếu Phụ thuộc (Referential Integrity)
     # =========================================================================
-    existing_ids = {task.id for task in tasks}
+    existing_ids = {task_id for task_id, _ in task_dependencies}
 
-    for task in tasks:
+    for task_id, dependencies in task_dependencies:
         # 3.1 Không có Task nào tự phụ thuộc vào chính nó
-        if task.id in task.dependencies:
-            errors.append(f"Task '{task.id}' không thể tự phụ thuộc vào chính nó.")
+        if dependencies is not None and task_id in dependencies:
+            errors.append(f"Task '{task_id}' không thể tự phụ thuộc vào chính nó.")
 
         # 3.2 Mọi mã ID trong dependencies phải thực sự tồn tại trong ir.tasks
-        for dep_id in task.dependencies:
+        for dep_id in dependencies or ():
             if dep_id not in existing_ids:
                 errors.append(
-                    f"Task '{task.id}' phụ thuộc vào mã công việc không tồn tại: '{dep_id}'."
+                    f"Task '{task_id}' phụ thuộc vào mã công việc không tồn tại: '{dep_id}'."
                 )
 
     # =========================================================================
@@ -133,12 +148,12 @@ def validate_ir(
     # =========================================================================
     # Xây dựng đồ thị có hướng: node -> dependencies (task phụ thuộc vào dep)
     # Chỉ bổ sung cạnh tới các ID thực sự tồn tại và khác chính task.id
-    adj: dict[str, list[str]] = {t.id: [] for t in tasks}
-    for task in tasks:
-        for dep_id in task.dependencies:
-            if dep_id in existing_ids and dep_id != task.id:
-                if dep_id not in adj[task.id]:
-                    adj[task.id].append(dep_id)
+    adj: dict[str, list[str]] = {task_id: [] for task_id, _ in task_dependencies}
+    for task_id, dependencies in task_dependencies:
+        for dep_id in dependencies or ():
+            if dep_id in existing_ids and dep_id != task_id:
+                if dep_id not in adj[task_id]:
+                    adj[task_id].append(dep_id)
 
     # Màu sắc:
     # 0 = WHITE (Chưa thăm)
@@ -177,12 +192,6 @@ def validate_ir(
     for node_id in sorted(existing_ids):
         if color[node_id] == 0:
             dfs(node_id, [])
-
-    # =========================================================================
-    # Kết luận & Xử lý raise_on_error
-    # =========================================================================
-    if raise_on_error and errors:
-        raise SchedulingValidationError(errors)
 
     return errors
 

@@ -111,6 +111,7 @@
   }
   .project-counts { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; color: var(--muted); font-size: 0.75rem; }
   .project-counts span { display: inline-flex; align-items: center; gap: 0.375rem; }
+  .project-bar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; }
   .workspace { max-width: var(--page-width); margin-inline: auto; padding: 1.5rem var(--page-gutter) 3rem; }
   .workspace-view > * + * { margin-top: 1.5rem; }
   .page-heading, .section-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.625rem 1rem; }
@@ -208,6 +209,8 @@
   .button:hover:not(:disabled) { border-color: var(--muted); background: var(--raised-hover); }
   .button.primary { color: var(--accent-ink); background: var(--accent-fill); border-color: var(--accent-fill); font-weight: 650; }
   .button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .button.setup-draft-button { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-border); }
+  .button.setup-draft-button:hover:not(:disabled) { background: var(--raised-hover); border-color: var(--accent); }
   .button.quiet { background: transparent; border-color: transparent; color: var(--muted); }
   .button:disabled { opacity: 0.55; cursor: not-allowed; }
   .schedule-action { min-width: 11rem; }
@@ -295,6 +298,35 @@
   .dialog-header, .dialog-footer { position: sticky; z-index: 1; background: var(--panel); }
   .dialog-header { top: 0; border-bottom: 1px solid var(--line); }
   .dialog-footer { bottom: 0; border-top: 1px solid var(--line); }
+  .button.guide-trigger { color: var(--accent); border-color: var(--accent-border); }
+  .guide-dialog {
+    inset: 0.75rem 0.75rem auto auto;
+    margin: 0;
+    width: min(25rem, calc(100% - 1.5rem));
+    max-height: calc(100dvh - 1.5rem);
+    overflow: auto;
+    overscroll-behavior: contain;
+    color: var(--text);
+  }
+  .guide-dialog::backdrop { background: rgb(5 7 12 / 0.48); }
+  .guide-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.625rem 1rem; }
+  .guide-header h2 svg { flex: none; color: var(--accent); }
+  .guide-body { display: grid; gap: 0.75rem; padding: 1rem; }
+  .guide-form-row { display: flex; gap: 0.5rem; margin-top: 0.375rem; }
+  .guide-form-row input { flex: 1; min-width: 0; }
+  .guide-dialog [aria-disabled="true"] { opacity: 0.65; cursor: wait; }
+  .guide-response { line-height: 1.55; overflow-wrap: anywhere; }
+  .guide-response:empty { margin-top: -0.75rem; }
+  .guide-loading { display: flex; align-items: center; gap: 0.5rem; }
+  .guide-answer {
+    white-space: pre-line;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--control-radius);
+    background: var(--inset);
+  }
+  .guide-suggestions { display: grid; gap: 0.375rem; }
+  .button.guide-question { justify-content: flex-start; text-align: left; color: var(--accent); white-space: normal; }
   .gantt-row { display: grid; grid-template-columns: clamp(8.5rem, 28vw, 13rem) minmax(0, 1fr); }
   .gantt-label { position: sticky; left: 0; z-index: 20; min-width: 0; background: var(--panel); overflow-wrap: anywhere; }
   .gantt-axis, .gantt-axis .gantt-label { background: var(--inset); }

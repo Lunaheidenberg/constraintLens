@@ -1,11 +1,13 @@
-import { useEffect, useReducer, useRef, useState } from "react";
-import { ArrowDown, ArrowRight, CalendarDays, ChartGantt, CircleHelp, Info, Layers3, LayoutGrid, ListTodo, LoaderCircle, Play, Plus, Settings2, Sparkles, UsersRound } from "lucide-react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { ArrowDown, ArrowRight, CalendarDays, ChartGantt, CircleHelp, Info, Layers3, LayoutGrid, ListTodo, LoaderCircle, Play, Plus, Settings2, UsersRound } from "lucide-react";
+import { ApplicationGuide, HelpButton, type HelpApi } from "./ApplicationGuide";
 import { formatDate, isCalendarDate, parseDateInput } from "./calendar";
 import { DateField } from "./DateField";
 import { DeadlineWarning } from "./DeadlineWarning";
-import { draftReady, generateProjectDraft } from "./draft";
 import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
+import { PlanningInput, usePlanningAssistant } from "./PlanningAssistant";
+import { planningApplyBlock } from "./planning";
 import { assessDeadline, canAcceptProposal, hasSolution, initialPlans, planReducer } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
 import { collectTaskProgress, matchesReportedStatuses, progressFromPlan } from "./progressReport";
@@ -13,7 +15,7 @@ import { hasUnscheduledStatusChanges, todoTasksDueForReview } from "./progressRe
 import { prepareScheduleResult } from "./schedulingFeedback";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
-import type { ParseRequest, PresetsMap, ProgressSnapshot, ProjectCalendar, ProjectDraft, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse } from "./types";
+import type { PresetsMap, ProgressSnapshot, ProjectCalendar, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse, Workspace } from "./types";
 
 const API_BASE = "http://localhost:8000";
 
@@ -79,6 +81,11 @@ function post<T>(path: string, body: unknown, signal?: AbortSignal) {
   });
 }
 
+const helpApi: HelpApi = {
+  topics: (workspace, signal) => request(`/api/help/topics?workspace=${workspace}`, { signal }),
+  ask: (workspace, question, signal) => post("/api/help/ask", { workspace, question }, signal),
+};
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -109,8 +116,6 @@ function newTask(ir: SchedulingIR): Task {
   return { id: `T${number}`, name: "", duration: 1, dependencies: [], kanban_stage: category, category, status: "To Do", assignee_id: null };
 }
 
-type Workspace = "setup" | "planning" | "recovery";
-
 const WORKSPACES = [
   { id: "setup", label: "Thiết lập", icon: Settings2 },
   { id: "planning", label: "Kế hoạch", icon: CalendarDays },
@@ -118,8 +123,6 @@ const WORKSPACES = [
 ] as const;
 
 const REQUEST_STATUS = {
-  generating: "Đang chờ bản nháp từ Gemini…",
-  confirming: "Đang kiểm tra dữ liệu đã xác nhận…",
   validating: "Đang kiểm tra dự án…",
   validatingSchedule: "Đang kiểm tra dự án…",
   solving: "Đang tính lịch…",
@@ -129,7 +132,7 @@ const REQUEST_STATUS = {
   preparingRecovery: "Đang hiển thị kết quả…",
 };
 
-type SchedulePhase = Exclude<keyof typeof REQUEST_STATUS, "generating" | "confirming">;
+type SchedulePhase = keyof typeof REQUEST_STATUS;
 
 function SectionTitle({ id, icon: Icon, children }: {
   id: string;
@@ -151,11 +154,6 @@ export default function App() {
   const [presetError, setPresetError] = useState("");
   const [presetRequest, setPresetRequest] = useState(0);
   const [selectedPreset, setSelectedPreset] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [draftPhase, setDraftPhase] = useState<"generating" | "confirming" | null>(null);
-  const [parseError, setParseError] = useState("");
-  const [draftError, setDraftError] = useState("");
-  const [pendingDraft, setPendingDraft] = useState<ProjectDraft | null>(null);
   const [editing, setEditing] = useState<number | "new" | null>(null);
   const [hasPlanningResult, setHasPlanningResult] = useState(false);
   const [dateInputs, setDateInputs] = useState(EMPTY_DATES);
@@ -171,14 +169,30 @@ export default function App() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [progressFeedback, setProgressFeedback] = useState<Feedback | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
-  const draftRequest = useRef<AbortController | null>(null);
   const [workspace, setWorkspace] = useState<Workspace>("setup");
   const focusTarget = useRef<string | null>(null);
+  const editVersion = useRef(0);
+  const applyBlocked = planningApplyBlock(ir.tasks.length, plans, !!asOfInput || entries.size > 0, !!phase || editing !== null);
+  const latestApplyBlock = useRef(applyBlocked);
+  useLayoutEffect(() => { latestApplyBlock.current = applyBlocked; }, [applyBlocked]);
+  const assistant = usePlanningAssistant(post, () => ({
+    version: editVersion.current,
+    blocked: latestApplyBlock.current || (activeRequest.current
+      ? "Hãy hoàn tất thao tác dự án đang chạy trước khi áp dụng bản nháp." : ""),
+  }), (confirmed) => {
+    changeProject((current) => ({ ...confirmed, members: current.members }));
+    setSelectedPreset("");
+    setHasPlanningResult(false);
+    setFeedback({ message: "Đã áp dụng bản nháp. Chọn người phụ trách cho từng công việc.", errors: [] });
+    goTo("planning");
+  });
+  const previousAssistantStep = useRef(assistant.step);
 
   function goTo(view: Workspace, target = `${view}-heading`) {
     if (view === workspace) {
       focusSection(target);
     } else {
+      if (workspace === "setup") assistant.cancelRequest();
       focusTarget.current = target;
       setWorkspace(view);
     }
@@ -197,7 +211,13 @@ export default function App() {
       focusTarget.current = null;
     }
   }, [workspace]);
-  const editVersion = useRef(0);
+  useEffect(() => {
+    if (previousAssistantStep.current !== assistant.step && workspace === "setup") {
+      focusSection(assistant.step === "review" ? "draft-heading"
+        : assistant.step === "clarify" ? "clarification-heading" : "planning-description");
+    }
+    previousAssistantStep.current = assistant.step;
+  }, [assistant.step, workspace]);
   const nextMemberId = useRef(1);
 
   const dateErrors = calendarErrors(calendar, dateInputs.deadline);
@@ -230,7 +250,6 @@ export default function App() {
 
   useEffect(() => () => {
     activeRequest.current?.abort();
-    draftRequest.current?.abort();
   }, []);
 
   function cancelScheduling() {
@@ -263,67 +282,28 @@ export default function App() {
     setDateInputs((current) => ({ ...current, [field]: value }));
   }
 
-  function loadProject(next: SchedulingIR, preset?: string) {
+  function loadProject(next: SchedulingIR, preset: string) {
     editVersion.current += 1;
     cancelScheduling();
     setProject((current) => ({
-      ir: preset === undefined ? { ...next, members: current.ir.members } : next,
+      ir: next,
       instance: current.instance + 1,
       scheduleRevision: current.scheduleRevision + 1,
       dirty: false,
     }));
-    setSelectedPreset(preset ?? "");
+    setSelectedPreset(preset);
     setHasPlanningResult(false);
     dispatchPlan({ type: "reset" });
     setFeedback(null);
     setProgressFeedback(null);
     setEditing(null);
-    if (preset !== undefined) setDateInputs(EMPTY_DATES);
+    setDateInputs(EMPTY_DATES);
     setAsOfInput("");
     setEntries(new Map());
   }
 
   function confirmReplace() {
     return !dirty || window.confirm("Thay thế dự án hiện tại và bỏ các thay đổi đang chỉnh sửa?");
-  }
-
-  async function parseProject() {
-    const payload: ParseRequest = { prompt: prompt.trim() };
-    if (draftPhase || !payload.prompt) return;
-    await generateProjectDraft(draftRequest, (signal) => post<ProjectDraft>("/api/parse/draft", payload, signal), {
-      pending: (pending) => {
-        setDraftPhase(pending ? "generating" : null);
-        if (pending) setParseError("");
-      },
-      ready: (draft) => {
-        setPendingDraft(draft);
-        setDraftError("");
-      },
-      failed: (error) => setParseError(errorMessage(error)),
-    });
-  }
-
-  async function confirmDraft() {
-    if (draftPhase || !pendingDraft || !draftReady(pendingDraft)) return;
-    const version = editVersion.current;
-    setDraftPhase("confirming");
-    setDraftError("");
-    try {
-      const confirmed = await post<SchedulingIR>("/api/parse/confirm", pendingDraft);
-      if (editVersion.current !== version) {
-        setDraftError("Dự án đã thay đổi trong lúc kiểm tra. Hãy xem lại rồi xác nhận bản nháp lần nữa.");
-        return;
-      }
-      loadProject(confirmed);
-      setPendingDraft(null);
-      setParseError("");
-      setFeedback({ message: "Đã áp dụng bản nháp. Chọn người phụ trách cho từng công việc.", errors: [] });
-      if (workspace === "setup") goTo("planning");
-    } catch (error) {
-      setDraftError(errorMessage(error));
-    } finally {
-      setDraftPhase(null);
-    }
   }
 
   async function validateProject(solve: boolean) {
@@ -520,6 +500,7 @@ export default function App() {
 
   function openTaskEditor(selection: number | "new") {
     if (selection !== "new" && completed.has(ir.tasks[selection].id)) return;
+    if (selection === "new") assistant.cancelRequest();
     editVersion.current += 1;
     setEditing(selection);
   }
@@ -579,10 +560,9 @@ export default function App() {
   }
 
   const unassigned = ir.tasks.filter((task) => task.assignee_id == null).length;
-  const busy = workspace === "setup" ? draftPhase ?? phase : phase ?? draftPhase;
   const currentFeedback = workspace === "planning" ? feedback : workspace === "recovery" ? progressFeedback : null;
-  const announcement = busy ? REQUEST_STATUS[busy] : currentFeedback && !currentFeedback.errors.length ? currentFeedback.message
-    : workspace === "setup" && pendingDraft && !parseError ? "Bản nháp Gemini đã sẵn sàng để xem lại." : "";
+  const announcement = workspace === "setup" && assistant.pendingMessage ? assistant.pendingMessage
+    : phase ? REQUEST_STATUS[phase] : currentFeedback && !currentFeedback.errors.length ? currentFeedback.message : "";
   const progressNotice = statusChanges && (
     <div className="notice notice-info">
       <Info size={16} aria-hidden="true" />
@@ -592,7 +572,7 @@ export default function App() {
       </button>
     </div>
   );
-  return (
+  const projectView = (
     <div className="app-shell" onChangeCapture={() => { editVersion.current += 1; }}>
       <a className="skip-link" href="#project-heading">Đến nội dung dự án</a>
       <p role="status" className="sr-only">{announcement}</p>
@@ -607,7 +587,7 @@ export default function App() {
               aria-controls={`workspace-${id}`} className="workspace-link" onClick={() => goTo(id)}>
               <Icon size={17} aria-hidden="true" />
               {label}
-              {(id === "setup" && pendingDraft || id === "planning" && proposal && !proposal.plan.recovery ||
+              {(id === "setup" && assistant.draft || id === "planning" && proposal && !proposal.plan.recovery ||
                 id === "recovery" && proposal?.plan.recovery) &&
                 <span className="nav-indicator"><span className="sr-only">Có bản xem trước</span></span>}
             </button>
@@ -619,9 +599,12 @@ export default function App() {
         <header className="project-bar">
           <div className="project-bar-inner">
             <h1 id="project-heading" tabIndex={-1} className="min-w-0 break-words text-sm font-semibold">{ir.project_name}</h1>
-            <div className="project-counts">
-              <span><ListTodo size={14} aria-hidden="true" /> {ir.tasks.length} công việc</span>
-              <span><UsersRound size={14} aria-hidden="true" /> {members.length} thành viên</span>
+            <div className="project-bar-actions">
+              <div className="project-counts">
+                <span><ListTodo size={14} aria-hidden="true" /> {ir.tasks.length} công việc</span>
+                <span><UsersRound size={14} aria-hidden="true" /> {members.length} thành viên</span>
+              </div>
+              <HelpButton />
             </div>
           </div>
         </header>
@@ -647,6 +630,7 @@ export default function App() {
                   <select className="control w-full" value={selectedPreset} onChange={(event) => {
                     const key = event.target.value;
                     if (confirmReplace()) {
+                      assistant.cancelRequest();
                       loadProject(presets[key], key);
                     }
                   }}>
@@ -663,30 +647,7 @@ export default function App() {
                     }}>Tải lại kịch bản</button>
                   </div>
                 )}
-                <form className="setup-description" onSubmit={(event) => { event.preventDefault(); void parseProject(); }}>
-                  <label className="field">Mô tả dự án
-                    <textarea className="control w-full resize-y leading-relaxed" rows={4} value={prompt} maxLength={12000}
-                      readOnly={draftPhase === "generating"}
-                      aria-describedby="description-help"
-                      placeholder="Ví dụ: Thiết kế giao diện trong 3 ngày, sau đó lập trình chức năng đăng nhập."
-                      onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
-                        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                          event.preventDefault();
-                          void parseProject();
-                        }
-                      }} />
-                  </label>
-                  <p id="description-help" className="helper">Ghi số ngày và công việc cần hoàn thành trước nếu đã biết.</p>
-                  <div className="setup-draft-actions">
-                    <button className="button primary" disabled={!!draftPhase || !prompt.trim()}>
-                      {draftPhase === "generating" ? <LoaderCircle size={15} className="busy-icon" aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}
-                      {draftPhase === "generating" ? "Đang tạo bản nháp…" : pendingDraft ? "Tạo lại bản nháp với Gemini" : "Tạo bản nháp với Gemini"}
-                    </button>
-                    {pendingDraft && <a href="#draft-heading" className="text-link">Xem bản nháp</a>}
-                  </div>
-                  {draftPhase === "generating" && <p className="helper">{REQUEST_STATUS.generating}</p>}
-                  {parseError && <p role="alert" className="notice error">{parseError}</p>}
-                </form>
+                {assistant.step !== "review" && <PlanningInput assistant={assistant} />}
               </section>
               <div className="setup-details">
                 <section aria-labelledby="calendar-heading">
@@ -715,12 +676,10 @@ export default function App() {
                 </div>
               </div>
             </div>
-            {pendingDraft && (
-              <DraftEditor draft={pendingDraft} busy={!!draftPhase} confirming={draftPhase === "confirming"} error={draftError}
-                replacing={ir.tasks.length > 0} onChange={(draft) => { setPendingDraft(draft); setDraftError(""); }}
-                onConfirm={() => void confirmDraft()} onCancel={() => {
-                  setPendingDraft(null); setDraftError(""); focusSection("source-heading");
-                }} />
+            {assistant.step === "review" && assistant.draft && (
+              <DraftEditor result={assistant.draft} confirming={assistant.phase === "confirming"} error={assistant.error}
+                blocked={applyBlocked} onChange={assistant.changeDraft} onConfirm={() => void assistant.confirm()}
+                onClose={assistant.describe} onBack={assistant.revisitQuestions} onStop={assistant.cancelRequest} />
             )}
           </section>
 
@@ -869,4 +828,6 @@ export default function App() {
       )}
     </div>
   );
+  // Help fields are siblings of the project edit-capture boundary, even when launched from a task dialog.
+  return <ApplicationGuide workspace={workspace} api={helpApi}>{projectView}</ApplicationGuide>;
 }

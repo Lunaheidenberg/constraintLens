@@ -226,6 +226,38 @@ export interface ProjectDraft {
   tasks: DraftTask[];
 }
 
+export type QuestionID = "Q1" | "Q2" | "Q3";
+
+export interface PlanningClarification {
+  goal: string | null;
+  questions: { id: QuestionID; text: string }[];
+}
+
+export interface PlanningDraftRequest extends ParseRequest {
+  clarifications: { id: QuestionID; question: string; answer: string | null }[];
+}
+
+export interface PlanningSource {
+  // "edited" is set locally when the user changes a draft value.
+  kind: "description" | "answer" | "ai" | "unknown" | "edited";
+  question_id?: QuestionID | null;
+}
+
+export interface PlanningTaskSources {
+  name: PlanningSource;
+  category: PlanningSource;
+  duration: PlanningSource;
+  dependencies: PlanningSource;
+}
+
+export interface PlanningDraftResult {
+  goal: string;
+  draft: ProjectDraft;
+  assumptions: string[];
+  uncertainties: string[];
+  sources: { goal: PlanningSource; project_name: PlanningSource; tasks: Record<string, PlanningTaskSources> };
+}
+
 /**
  * Kết quả kiểm tra dữ liệu POST /api/validate.
  */
@@ -246,4 +278,17 @@ export interface PresetScenario {
  * Bản đồ ánh xạ kịch bản mẫu từ API: Record<tên_kịch_bản, SchedulingIR>.
  */
 export type PresetsMap = Record<string, SchedulingIR>;
+
+export type Workspace = "setup" | "planning" | "recovery";
+
+export interface HelpSuggestion {
+  topic: string;
+  question: string;
+}
+
+export interface HelpAnswer {
+  topic: string | null;
+  answer: string;
+  suggestions: HelpSuggestion[];
+}
 

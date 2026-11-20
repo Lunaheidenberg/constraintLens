@@ -49,8 +49,8 @@ class ParserTests(unittest.TestCase):
     def test_draft_wire_configuration_fallback_and_quota_with_installed_sdk(self):
         real_client = genai.Client
         for status, expected_models in (
-            (504, ["gemini-3.8-flash", "gemini-3.6-flash"]),
-            (429, ["gemini-3.8-flash"]),
+            (504, ["gemini-3.6-flash", "gemini-3.5-flash"]),
+            (429, ["gemini-3.6-flash"]),
         ):
             with self.subTest(status=status):
                 requests = []
@@ -72,7 +72,7 @@ class ParserTests(unittest.TestCase):
                         return real_client(**options)
 
                     with (
-                        patch.dict(os.environ, {"GEMINI_DRAFT_MODEL": "", "GEMINI_DRAFT_FALLBACK_MODEL": "gemini-3.6-flash",
+                        patch.dict(os.environ, {"GEMINI_DRAFT_MODEL": "", "GEMINI_DRAFT_FALLBACK_MODEL": "gemini-3.5-flash",
                                                "GOOGLE_GENAI_USE_ENTERPRISE": "true"}),
                         patch("parser.genai.Client", side_effect=make_client),
                         patch("parser.monotonic", side_effect=lambda: clock[0]),
@@ -281,7 +281,7 @@ class DraftApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.generate.call_count, 3)
 
     async def test_fallback_skips_same_model_and_expired_budget(self):
-        for fallback, times in (("models/gemini-3.8-flash", [0, 0, 1, 1]), ("gemini-3.5-flash", [0, 0, 45, 45])):
+        for fallback, times in (("models/gemini-3.6-flash", [0, 0, 1, 1]), ("gemini-3.5-flash", [0, 0, 45, 45])):
             with self.subTest(fallback=fallback):
                 self.generate.reset_mock()
                 self.generate.side_effect = APIError(504, {})

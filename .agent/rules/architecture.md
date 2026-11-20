@@ -11,7 +11,11 @@ The UI sends HTTP/JSON requests to FastAPI. `App.tsx` currently uses the absolut
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/presets` | Returns built-in scheduling scenarios from `api.py`. |
-| `POST /api/parse/draft` | Extracts a reviewable task draft from Vietnamese or English text. Reads the Gemini API key on the server. |
+| `POST /api/parse/draft` | Retains the T6 task extraction endpoint for Vietnamese or English text. Reads the Gemini API key on the server. |
+| `POST /api/planning/clarify` | Accepts a project description and returns a goal and up to three clarification questions. |
+| `POST /api/planning/draft` | Accepts the description and optional clarification answers. Returns a reviewable draft, field provenance, assumptions, and uncertainties. |
+| `GET /api/help/topics?workspace=setup\|planning\|recovery` | Returns suggested help questions for the active workspace. |
+| `POST /api/help/ask` | Accepts `question` and `workspace` and returns `topic`, `answer`, and `suggestions`. Common FAQs are answered locally. Other requests may use Gemini to select verified excerpts. |
 | `POST /api/parse/confirm` | Converts a reviewed draft into an unassigned scheduling IR using Pydantic and `validate_ir`. Returns HTTP 422 for incomplete or invalid drafts. |
 | `POST /api/parse` | Retains the legacy Gemini-to-IR contract for older callers. |
 | `POST /api/validate` | Accepts a scheduling IR and returns a validity flag and business-rule errors. React sets `require_assignments=true` to validate member assignments, durations, and dependencies before solving. |
@@ -37,9 +41,17 @@ T5 previews the accepted plan against a valid rescheduling proposal. Acceptance 
 
 The React/FastAPI workflow keeps the editable project and the comparison snapshots in memory. The repository retains the legacy Streamlit entry point in `app.py`.
 
-T6 keeps Gemini extraction in a separate in-memory `ProjectDraft` while the active project remains editable. Duration and prerequisites each carry a review state. Explicitly sourced fields are marked `provided` when the parser can match a supporting quote in the description. `suggested` requires review, and `missing` has a null value. An empty prerequisites array records an explicit choice of no prerequisites. The shared Task Editor supports corrections and marks edited or accepted values `confirmed`. Applying a validated draft preserves the member roster and calendar settings, replaces the task list with unassigned To Do tasks, and clears plans and progress tied to the previous list.
+### T7 AI planning and application help
 
-The React extraction path rejects malformed or unexpected Gemini output as a whole. Generation errors preserve the description, any draft edits, and the active project. The parser makes at most one fallback call for selected provider errors and returns user-facing messages without provider exception details. Draft review, presets, manual entry, and scheduling operate without Gemini.
+React keeps the planning draft separate from the editable project. Duration and prerequisites carry a review state. Values grounded in the description or a clarification answer can be `provided`. A clear duration correction naming one task takes precedence over the description and records the answer's question ID. Unresolved duration conflicts leave the duration blank for manual entry. Bulk confirmation applies to concrete suggestions. An empty prerequisite list records a decision that no prerequisites are needed.
+
+React applies a validated draft only to a project without tasks, schedules, or progress. It checks this condition again when the confirmation response arrives. Applying the draft preserves the roster and calendar and adds unassigned To Do tasks. Help requests carry the question and workspace and leave project, progress, and schedule state intact.
+
+Planning rejects invalid provider responses and keeps the user's description, edits, and active project available for retry. Selected transient provider errors get one retry on the same model. Draft review, presets, manual entry, scheduling, and local FAQs can run without Gemini.
+
+### Historical T6 extraction
+
+The former React flow generated a draft with `/api/parse/draft`. Applying a reviewed draft could replace the active task list and clear its plans and progress. The T6 extraction endpoint remains available to callers, and T7 uses the same `/api/parse/confirm` endpoint and Validator to convert a reviewed draft into a scheduling IR.
 
 Local checks include `uv run --locked python -m unittest discover -s tests`, the executable scenarios in `validator.py` and `solver.py`, and the frontend TypeScript check, build, and `npm test` (Node 24). The direct parser demo and `diagnose_api.py` use the live Gemini API and are outside this baseline.
 
