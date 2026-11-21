@@ -56,7 +56,7 @@ export function collectTaskProgress(
   const progress: [string, ProgressSnapshot["task_progress"][string]][] = [];
   const errors: string[] = [];
   for (const task of tasks) {
-    const value = entries.get(task.id);
+    const value = entries.get(task.id)?.trim();
     if (task.status === "Doing" && value) {
       const duration = parseRemainingDuration(value);
       if (duration === null) errors.push(`Nhập số ngày thực tế còn lại là số nguyên dương cho '${task.id}'.`);
@@ -64,8 +64,25 @@ export function collectTaskProgress(
     } else if (task.status === "Done") {
       const finish = completed.get(task.id)?.actual_finish_date ?? parseDateInput(value ?? "");
       if (finish) progress.push([task.id, { actual_finish_date: finish }]);
-      else if (value?.trim()) errors.push(`Nhập ngày hoàn thành thực tế của ${task.id} theo định dạng DD/MM/YYYY.`);
+      else if (value) errors.push(`Nhập ngày hoàn thành thực tế của ${task.id} theo định dạng DD/MM/YYYY.`);
     }
   }
   return { taskProgress: Object.fromEntries(progress), errors };
+}
+
+export function hasProgressReportEdits(
+  asOfInput: string, draft: ReturnType<typeof collectTaskProgress>, confirmed: ProgressSnapshot | null,
+) {
+  const asOf = parseDateInput(asOfInput);
+  if (draft.errors.length || asOf !== (confirmed?.progress_as_of_date ?? null) || (!asOf && asOfInput.trim())) return true;
+
+  const submitted = new Map(Object.entries(confirmed?.task_progress ?? {}));
+  const entries = Object.entries(draft.taskProgress);
+  return entries.length !== submitted.size || entries.some(([id, entry]) => {
+    const previous = submitted.get(id);
+    if (!previous) return true;
+    return "remaining_duration" in entry
+      ? !("remaining_duration" in previous) || entry.remaining_duration !== previous.remaining_duration
+      : !("actual_finish_date" in previous) || entry.actual_finish_date !== previous.actual_finish_date;
+  });
 }

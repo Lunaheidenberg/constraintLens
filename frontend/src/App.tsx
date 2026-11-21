@@ -10,8 +10,10 @@ import { PlanningInput, usePlanningAssistant } from "./PlanningAssistant";
 import { planningApplyBlock } from "./planning";
 import { assessDeadline, canAcceptProposal, hasSolution, initialPlans, planReducer } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
-import { collectTaskProgress, matchesReportedStatuses, progressFromPlan } from "./progressReport";
+import { collectTaskProgress, hasProgressReportEdits, matchesReportedStatuses, parseRemainingDuration, progressFromPlan } from "./progressReport";
 import { hasUnscheduledStatusChanges, todoTasksDueForReview } from "./progressReview";
+import { RecoveryAssistant } from "./RecoveryAssistant";
+import { recoveryContext } from "./recoveryContext";
 import { prepareScheduleResult } from "./schedulingFeedback";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
@@ -30,6 +32,7 @@ const EMPTY_DATES = { start: "", deadline: "" };
 
 interface ProjectState {
   ir: SchedulingIR;
+  usedTaskIds: ReadonlySet<string>;
   instance: number;
   scheduleRevision: number;
   dirty: boolean;
@@ -38,6 +41,10 @@ interface ProjectState {
 interface Feedback {
   message: string;
   errors: string[];
+}
+
+function schedulingFeedback(message: string, errors: string[], retainedProposal: boolean): Feedback {
+  return { message, errors: retainedProposal && errors.length ? [...errors, "Đề xuất từ lần tính trước vẫn được giữ."] : errors };
 }
 
 function calendarErrors(calendar: ProjectCalendar, deadlineInput: string) {
@@ -108,10 +115,9 @@ function schedulingErrors(ir: SchedulingIR) {
   return errors;
 }
 
-function newTask(ir: SchedulingIR): Task {
-  const ids = new Set(ir.tasks.map((task) => task.id));
+function newTask(ir: SchedulingIR, usedTaskIds: ReadonlySet<string>): Task {
   let number = ir.tasks.length + 1;
-  while (ids.has(`T${number}`)) number += 1;
+  while (usedTaskIds.has(`T${number}`)) number += 1;
   const category = ir.kanban_config.stages[0] ?? "Coding";
   return { id: `T${number}`, name: "", duration: 1, dependencies: [], kanban_stage: category, category, status: "To Do", assignee_id: null };
 }
@@ -147,8 +153,10 @@ function SectionTitle({ id, icon: Icon, children }: {
 }
 
 export default function App() {
-  const [project, setProject] = useState<ProjectState>({ ir: EMPTY_PROJECT, instance: 0, scheduleRevision: 0, dirty: false });
-  const { ir, instance, scheduleRevision, dirty } = project;
+  const [project, setProject] = useState<ProjectState>({
+    ir: EMPTY_PROJECT, usedTaskIds: new Set(), instance: 0, scheduleRevision: 0, dirty: false,
+  });
+  const { ir, usedTaskIds, instance, scheduleRevision, dirty } = project;
   const members = ir.members ?? [];
   const [presets, setPresets] = useState<PresetsMap>({});
   const [presetError, setPresetError] = useState("");
@@ -180,6 +188,8 @@ export default function App() {
     blocked: latestApplyBlock.current || (activeRequest.current
       ? "Hãy hoàn tất thao tác dự án đang chạy trước khi áp dụng bản nháp." : ""),
   }), (confirmed) => {
+    const conflict = confirmed.tasks.find(({ id }) => usedTaskIds.has(id));
+    if (conflict) throw new Error(`Mã ${conflict.id} đã từng được dùng trong dự án. Hãy đổi mã trong bản nháp rồi áp dụng lại.`);
     changeProject((current) => ({ ...confirmed, members: current.members }));
     setSelectedPreset("");
     setHasPlanningResult(false);
@@ -222,23 +232,32 @@ export default function App() {
 
   const dateErrors = calendarErrors(calendar, dateInputs.deadline);
   const localErrors = [...dateErrors, ...schedulingErrors(ir)];
-  const { accepted, proposal, todoConfirmed } = plans;
+  const { accepted, proposal, confirmedProgress } = plans;
   const planningProgress = plans.confirmedProgress?.snapshot ?? progressFromPlan(accepted);
-  const planningNeedsReport = !!accepted && !matchesReportedStatuses(ir.tasks, planningProgress);
   const acceptedDeadline = dateErrors.length ? accepted?.calendar.target_deadline_date : calendar.target_deadline_date;
   const acceptedAssessment = accepted ? assessDeadline(accepted, acceptedDeadline) : null;
   const outdated = accepted !== null && (accepted.scheduleRevision !== scheduleRevision ||
     accepted.calendar.project_start_date !== calendar.project_start_date);
   const statusChanges = hasUnscheduledStatusChanges(accepted, ir.tasks);
-  const completed = new Map((plans.confirmedProgress?.completedTasks ?? accepted?.recovery?.completed_tasks ?? []).map((task) => [task.id, task]));
+  const completed = new Map((confirmedProgress?.completedTasks ?? accepted?.recovery?.completed_tasks ?? []).map((task) => [task.id, task]));
   const lockedTasks = new Set(completed.keys());
   const confirmedAsOf = planningProgress?.progress_as_of_date ?? "";
   const minimumAsOf = confirmedAsOf > calendar.project_start_date ? confirmedAsOf : calendar.project_start_date;
   const validReportingDate = !!asOf && asOf >= minimumAsOf && asOf < "9999-12-31";
   const todoReview = todoTasksDueForReview(accepted, ir.tasks, validReportingDate ? asOf : "");
+  const reviewedTodoTaskIds = asOf === confirmedAsOf ? confirmedProgress?.reviewedTodoTaskIds ?? [] : [];
+  const todoWasConfirmed = todoReview.length > 0 && todoReview.every(({ id }) => reviewedTodoTaskIds.includes(id));
+  const todoConfirmed = todoReview.length > 0 && (plans.todoConfirmed ?? todoWasConfirmed);
+  const draftProgress = collectTaskProgress(ir.tasks, entries, completed);
+  const planningNeedsReport = accepted !== null && (
+    !matchesReportedStatuses(ir.tasks, planningProgress) ||
+    hasProgressReportEdits(asOfInput, draftProgress, planningProgress) ||
+    todoConfirmed !== todoWasConfirmed
+  );
+  const hasCurrentProposal = proposal?.revision === plans.revision && !planningNeedsReport;
   const progressPhase = phase === "checkingProgress" || phase === "rescheduling" || phase === "preparingRecovery" ? phase : null;
   const planningPhase = progressPhase ? null : phase;
-  const editedTask = editing === "new" ? newTask(ir) : editing === null ? null : ir.tasks[editing];
+  const editedTask = editing === "new" ? newTask(ir, usedTaskIds) : editing === null ? null : ir.tasks[editing];
 
   useEffect(() => {
     const controller = new AbortController();
@@ -258,9 +277,9 @@ export default function App() {
     setPhase(null);
   }
 
-  function invalidateProposal() {
+  function invalidateProposal(todoConfirmed: boolean | null = null) {
     cancelScheduling();
-    dispatchPlan({ type: "inputsChanged" });
+    dispatchPlan({ type: "inputsChanged", todoConfirmed });
     setFeedback(null);
     setProgressFeedback(null);
   }
@@ -268,12 +287,18 @@ export default function App() {
   function changeProject(update: (current: SchedulingIR) => SchedulingIR, affectsSchedule = true) {
     editVersion.current += 1;
     invalidateProposal();
-    setProject((current) => ({
-      ...current,
-      ir: update(current.ir),
-      scheduleRevision: current.scheduleRevision + Number(affectsSchedule),
-      dirty: true,
-    }));
+    setProject((current) => {
+      const next = update(current.ir);
+      // Giữ mã đã dùng kể cả khi công việc không còn trong danh sách hiện tại.
+      const newIds = next.tasks.map(({ id }) => id).filter((id) => !current.usedTaskIds.has(id));
+      return {
+        ...current,
+        ir: next,
+        usedTaskIds: newIds.length ? new Set([...current.usedTaskIds, ...newIds]) : current.usedTaskIds,
+        scheduleRevision: current.scheduleRevision + Number(affectsSchedule),
+        dirty: true,
+      };
+    });
   }
 
   function changeCalendar(field: keyof typeof EMPTY_DATES, value: string) {
@@ -287,6 +312,7 @@ export default function App() {
     cancelScheduling();
     setProject((current) => ({
       ir: next,
+      usedTaskIds: new Set(next.tasks.map(({ id }) => id)),
       instance: current.instance + 1,
       scheduleRevision: current.scheduleRevision + 1,
       dirty: false,
@@ -314,8 +340,9 @@ export default function App() {
     const startedAt = performance.now();
     setPhase(solve ? "validatingSchedule" : "validating");
     setFeedback(null);
-    if (solve) dispatchPlan({ type: "cancel" });
-    const report = (message: string, errors: string[] = []) => setFeedback({ message, errors });
+    if (solve) setProgressFeedback(null);
+    const report = (message: string, errors: string[] = []) =>
+      setFeedback(schedulingFeedback(message, errors, solve && hasCurrentProposal));
     try {
       const validation = await post<ValidateResponse>("/api/validate?require_assignments=true", ir, signal);
       if (signal.aborted) return;
@@ -340,7 +367,7 @@ export default function App() {
         report("Không thể hiển thị lịch", ["API cần trả về lịch theo thành viên. Kiểm tra phiên bản máy chủ."]);
       } else if (!hasSolution(solved.status)) {
         report(`Không thể lập lịch (${solved.status})`, solved.errors.length ? solved.errors : ["Kiểm tra dự án và thử lại."]);
-      } else if (!solvedCalendar?.final_work_date || !solved.scheduled_tasks.length) {
+      } else if (!solvedCalendar?.final_work_date || !isCalendarDate(solvedCalendar.final_work_date) || !solved.scheduled_tasks.length) {
         report("Không thể hiển thị lịch", ["API chưa trả về lịch theo ngày. Kiểm tra phiên bản máy chủ."]);
       } else {
         if (!(await prepareScheduleResult(startedAt, signal, () => setPhase("preparingSchedule")))) return;
@@ -376,11 +403,18 @@ export default function App() {
       report("Không thể hiển thị lịch", ["API chưa trả về ngày hoàn thành hợp lệ. Hãy thử lại."]);
       return;
     }
+    if (revised.progress_as_of_date !== snapshot.progress_as_of_date ||
+      (!revised.scheduled_tasks.length && !revised.completed_tasks.length)) {
+      report("Không thể hiển thị lịch", ["Kết quả lập lịch không khớp với báo cáo đã gửi. Hãy thử lại."]);
+      return;
+    }
     const preparing = source === "planning" ? "preparingSchedule" : "preparingRecovery";
     if (!(await prepareScheduleResult(startedAt, signal, () => setPhase(preparing)))) return;
     const { status, scheduled_tasks, solve_time_ms, errors: _errors, ...rest } = revised;
     const { progress_as_of_date, replanning_start_day, replanning_start_date, remaining_horizon_days, completed_tasks, ...finish } = rest;
-    const confirmation = source === "progress" ? { snapshot, completedTasks: completed_tasks } : undefined;
+    const confirmation = source === "progress" ? {
+      snapshot, completedTasks: completed_tasks, reviewedTodoTaskIds: todoReview.map(({ id }) => id),
+    } : undefined;
     dispatchPlan({ type: "propose", revision: plans.revision, confirmation, plan: {
       calendar: finish, status, scheduledTasks: scheduled_tasks, solveTimeMs: solve_time_ms,
       tasks: ir.tasks, members, scheduleRevision,
@@ -393,8 +427,9 @@ export default function App() {
   async function requestRecovery(solve: boolean) {
     if (activeRequest.current || !accepted || localErrors.length || !validReportingDate) return;
     if (solve && todoReview.length > 0 && !todoConfirmed) return;
-    const { taskProgress, errors } = collectTaskProgress(ir.tasks, entries, completed);
-    const report = (message: string, errors: string[] = []) => setProgressFeedback({ message, errors });
+    const { taskProgress, errors } = draftProgress;
+    const report = (message: string, errors: string[] = []) =>
+      setProgressFeedback(schedulingFeedback(message, errors, solve && hasCurrentProposal));
     if (errors.length) {
       report("Sửa thông tin tiến độ", errors);
       return;
@@ -406,7 +441,7 @@ export default function App() {
     const startedAt = performance.now();
     setPhase(solve ? "rescheduling" : "checkingProgress");
     setProgressFeedback(null);
-    if (solve && proposal) dispatchPlan({ type: "cancel" });
+    if (solve) setFeedback(null);
     const payload: RescheduleRequest = { ir, calendar, progress: { progress_as_of_date: asOf, task_progress: taskProgress } };
     try {
       if (!solve) {
@@ -451,13 +486,16 @@ export default function App() {
   }
 
   function saveTask(updated: Task) {
+    if (editing === null) return;
+    const original = editing === "new" ? null : ir.tasks[editing];
+    if (updated.id !== original?.id && usedTaskIds.has(updated.id)) {
+      return `Mã ${updated.id} đã từng được dùng trong dự án. Hãy chọn mã khác.`;
+    }
     if (editing === "new") {
       changeProject((current) => ({ ...current, tasks: [...current.tasks, updated] }));
       return;
     }
-    if (editing === null) return;
-    const original = ir.tasks[editing];
-    if (completed.has(original.id) || (updated.id !== original.id && protectTaskIdentity(original))) return;
+    if (!original || completed.has(original.id) || (updated.id !== original.id && protectTaskIdentity(original))) return;
     const affectsSchedule = updated.id !== original.id || updated.name !== original.name ||
       updated.duration !== original.duration || taskCategory(updated) !== taskCategory(original) ||
       (updated.assignee_id ?? null) !== (original.assignee_id ?? null) ||
@@ -486,6 +524,7 @@ export default function App() {
   function removeTask(index: number) {
     const task = ir.tasks[index];
     if (completed.has(task.id) || protectTaskIdentity(task)) return;
+    setEditing(null);
     setEntries((current) => { const next = new Map(current); next.delete(task.id); return next; });
     changeProject((current) => {
       const id = current.tasks[index].id;
@@ -511,11 +550,25 @@ export default function App() {
     if (firstEditable !== -1) openTaskEditor(firstEditable);
   }
 
-  function changeProgress(update: () => void) {
+  function changeProgress(update: () => void, todoConfirmed: boolean | null = null) {
     editVersion.current += 1;
-    invalidateProposal();
+    invalidateProposal(todoConfirmed);
     setProject((current) => ({ ...current, dirty: true }));
     update();
+  }
+
+  function changeProgressDate(value: string) {
+    if (value.trim() === asOfInput.trim()) setAsOfInput(value);
+    else changeProgress(() => setAsOfInput(value));
+  }
+
+  function changeProgressEntry(id: string, value: string) {
+    const previous = entries.get(id) ?? "";
+    if (previous === value) return;
+    const parseEntry = ir.tasks.find((task) => task.id === id)?.status === "Doing" ? parseRemainingDuration : parseDateInput;
+    const update = () => setEntries((current) => new Map(current).set(id, value));
+    if ((parseEntry(previous) ?? previous.trim()) === (parseEntry(value) ?? value.trim())) update();
+    else changeProgress(update, plans.todoConfirmed);
   }
 
   function renderProposal() {
@@ -523,7 +576,14 @@ export default function App() {
     const fromProgress = proposal.source === "progress";
     const assessment = assessDeadline(proposal.plan);
     const late = !!assessment?.daysLate;
-    const canAccept = canAcceptProposal(plans);
+    const deadlineAllowsAcceptance = canAcceptProposal(plans);
+    const canAccept = !planningNeedsReport && deadlineAllowsAcceptance;
+    const recalculating = phase && phase !== "validating" && phase !== "checkingProgress";
+    const context = recoveryContext(plans, instance);
+    const explain = context ? (
+      workspace === (fromProgress ? "recovery" : "planning") &&
+      <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} />
+    ) : <p className="helper">Cần có dữ liệu lịch đầy đủ để giải thích đề xuất. Hãy tính lại lịch.</p>;
     return (
       <section id="schedule-proposal" tabIndex={-1} className="panel proposal grid-cols-[minmax(0,1fr)] result-enter" aria-labelledby="proposal-heading">
         <div className="section-bar">
@@ -541,7 +601,7 @@ export default function App() {
               focusSection(fromProgress ? "progress-heading" : "schedule-heading");
             }}>Hủy đề xuất</button>
             <button className="button primary" disabled={!!phase || !canAccept} onClick={() => {
-              if (activeRequest.current || !canAcceptProposal(plans)) return;
+              if (activeRequest.current || !canAccept) return;
               dispatchPlan({ type: "accept" });
               editVersion.current += 1;
               const message = { message: "Đã chấp nhận lịch.", errors: [] };
@@ -551,10 +611,13 @@ export default function App() {
             }}>Chấp nhận lịch</button>
           </div>
         </div>
+        {recalculating && <p className="notice notice-info" role="status">Đang tính lại. Bạn đang xem đề xuất từ lần tính trước.</p>}
         {late && assessment && <DeadlineWarning assessment={assessment} onRevise={revisePlan} />}
-        {!late && !canAccept && <p className="notice warning" role="status">Chưa xác định được lịch có đáp ứng hạn chót. Hãy lập lịch lại.</p>}
-        {accepted ? <PlanComparison plans={plans} />
-          : <Schedule plan={proposal.plan} members={members} deadline={proposal.plan.calendar.target_deadline_date} />}
+        {!late && !deadlineAllowsAcceptance && <p className="notice warning" role="status">Chưa xác định được lịch có đáp ứng hạn chót. Hãy lập lịch lại.</p>}
+        {accepted ? <PlanComparison plans={plans} proposalExplanation={explain} /> : <>
+          {explain}
+          <Schedule plan={proposal.plan} members={members} deadline={proposal.plan.calendar.target_deadline_date} />
+        </>}
       </section>
     );
   }
@@ -573,7 +636,9 @@ export default function App() {
     </div>
   );
   const projectView = (
-    <div className="app-shell" onChangeCapture={() => { editVersion.current += 1; }}>
+    <div className="app-shell" onChangeCapture={(event) => {
+      if (!(event.target instanceof Element && event.target.closest("[data-recovery-assistant]"))) editVersion.current += 1;
+    }}>
       <a className="skip-link" href="#project-heading">Đến nội dung dự án</a>
       <p role="status" className="sr-only">{announcement}</p>
       <aside className="app-rail">
@@ -713,11 +778,13 @@ export default function App() {
                 </div>
               </div>
               {planningPhase === "validating" && <p className="helper">{REQUEST_STATUS.validating}</p>}
-              {planningNeedsReport && <p id="planning-progress-required" className="notice warning">
-                Trạng thái thực tế đã thay đổi. <button className="text-link underline" onClick={() => goTo("recovery", "progress-heading")}>
-                  Xác nhận tiến độ
-                </button> để lập lịch theo các trạng thái mới.
-              </p>}
+              {confirmedAsOf && <p className="helper">Báo cáo dùng để lập lại lịch: đã xác nhận đến hết <time dateTime={confirmedAsOf}>{formatDate(confirmedAsOf)}</time>.</p>}
+              {planningNeedsReport && <div id="planning-progress-required" className="notice warning">
+                <p role="status">Báo cáo tiến độ có thay đổi chưa được áp dụng.</p>
+                <button className="text-link underline" onClick={() => goTo("recovery", "progress-heading")}>
+                  Đến báo cáo tiến độ
+                </button>
+              </div>}
               {localErrors.length > 0 && (
                 <div id="solve-requirements" className="notice warning">
                   <p className="font-semibold">Cần hoàn tất trước khi lập lịch</p>
@@ -797,17 +864,11 @@ export default function App() {
               projectNeedsCorrections={localErrors.length > 0} onOpenPlanning={() => goTo("planning", "solve-heading")}
               phase={progressPhase} pendingMessage={progressPhase ? REQUEST_STATUS[progressPhase] : ""}
               feedback={progressFeedback} hasProposal={proposal?.source === "progress"}
+              hasPendingEdits={planningNeedsReport} confirmedAsOf={confirmedAsOf}
               todoReview={todoReview} todoConfirmed={todoConfirmed} onOpenKanban={() => goTo("recovery", "kanban-heading")}
-              onConfirmTodo={(confirmed) => {
-                if (confirmed) dispatchPlan({ type: "confirmTodo" });
-                else invalidateProposal();
-              }}
-              onDateChange={(value) => {
-                if (value !== asOfInput) changeProgress(() => setAsOfInput(value));
-              }}
-              onEntryChange={(id, value) => {
-                if (value !== (entries.get(id) ?? "")) changeProgress(() => setEntries((current) => new Map(current).set(id, value)));
-              }}
+              onConfirmTodo={invalidateProposal}
+              onDateChange={changeProgressDate}
+              onEntryChange={changeProgressEntry}
               onRequest={(solve) => void requestRecovery(solve)} />
             <section aria-labelledby="recovery-comparison-heading" className="space-y-3">
               <div className="section-bar">

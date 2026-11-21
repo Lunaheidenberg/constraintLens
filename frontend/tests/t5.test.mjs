@@ -192,14 +192,44 @@ test("C16: all-Done uses actual completion before the reporting day, with a zero
   }
 });
 
-test("C17: solver failures have no comparison or acceptable proposal", () => {
+test("C17 and F5: solver failures cannot create or displace a valid proposal", () => {
   for (const status of ["INFEASIBLE", "UNKNOWN", "MODEL_INVALID", "INVALID_INPUT"]) {
     const failed = plan(null, { tasks: [], status });
     assert.equal(comparePlans(baseline, failed), null);
-    const state = propose(propose(active, revised), failed);
-    assert.equal(comparisonPair(state), null);
-    assert.equal(accept(state).accepted, baseline);
+    assert.equal(comparisonPair(propose(active, failed)), null);
+    const confirmation = { snapshot: { progress_as_of_date: "2026-11-20", task_progress: {} }, completedTasks: [], reviewedTodoTaskIds: [] };
+    const prior = planReducer(active, { type: "propose", plan: revised, revision: active.revision, confirmation });
+    const state = planReducer(prior, {
+      type: "propose", plan: failed, revision: prior.revision, confirmation: { ...confirmation, completedTasks: [completion("A", START)] },
+    });
+    assert.equal(state, prior);
+    assert.equal(state.confirmedProgress, confirmation);
+    assert.equal(state.accepted, baseline);
+    assert.equal(accept(state).accepted, revised);
   }
+});
+
+test("F5: direct dependency changes count even with identical dates", () => {
+  const snapshot = (dependencies) => plan("2026-11-15", { tasks: [
+    work("T1", 0, 1), { ...work("T2", 1, 2), dependencies: ["T1"] }, { ...work("T7", 2, 3), dependencies },
+  ] });
+  const originals = snapshot(["T2"]);
+  const withDirectEdge = snapshot(["T2", "T1"]);
+  for (const [before, after] of [[originals, withDirectEdge], [withDirectEdge, originals]]) {
+    const result = comparePlans(before, after);
+    const [changed] = result.tasks.filter(hasTaskChange);
+    assert.equal(changed.id, "T7");
+    assert.equal(changed.dependenciesChanged, true);
+    assert.equal(changed.unchanged, true);
+    assert.equal(changed.moved, false);
+    assert.equal(changed.durationChanged, false);
+    assert.equal(changed.assigneeChanged, false);
+    assert.equal(result.movedCount, 0);
+    assert.equal(result.finishDelta, 0);
+  }
+  const equivalent = comparePlans(withDirectEdge, snapshot(["T1", "T2", "T2"]));
+  assert.equal(equivalent.tasks.at(-1).dependenciesChanged, false);
+  assert.deepEqual(equivalent.tasks.filter(hasTaskChange), []);
 });
 
 test("invalid dates and unmatched IDs preserve unavailable values", () => {

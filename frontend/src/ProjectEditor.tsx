@@ -316,7 +316,7 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
   draftReview?: { duration: boolean; dependencies: boolean };
   planningOnly?: boolean;
   lockId?: boolean;
-  onSave: (updated: T, review: { duration: boolean; dependencies: boolean }) => void;
+  onSave: (updated: T, review: { duration: boolean; dependencies: boolean }) => string | void;
   onRemove?: () => void;
   onClose: () => void;
 }) {
@@ -369,7 +369,8 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
       invalid("duration", "Thời lượng phải là số nguyên dương tính theo ngày.");
       return;
     }
-    onSave({ ...fields, id, name, category, duration: days }, { duration: durationReviewed, dependencies: dependenciesReviewed });
+    const idError = onSave({ ...fields, id, name, category, duration: days }, { duration: durationReviewed, dependencies: dependenciesReviewed });
+    if (idError) return invalid("id", idError);
     dialog.current?.close();
   }
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { GitCompareArrows } from "lucide-react";
 import { formatDate } from "./calendar";
 import { comparePlans, hasTaskChange, type ScheduleComparison, type TaskComparison } from "./comparison";
@@ -79,12 +79,13 @@ function ComparisonSummary({ comparison, labels }: {
 function taskClassifications(task: TaskComparison) {
   const labels = [];
   if (task.moved) labels.push("Đổi lịch");
-  if (task.unchanged) labels.push("Giữ nguyên lịch");
+  if (task.unchanged) labels.push(task.dependenciesChanged ? "Giữ nguyên ngày dự kiến" : "Giữ nguyên lịch");
   if (task.durationChanged) {
     labels.push(`Đổi thời lượng (${task.previous?.interval?.duration} → ${task.revised?.interval?.duration} ngày)`);
   }
   if (task.confirmed) labels.push(task.newlyConfirmed ? "Mới xác nhận hoàn thành" : "Đã xác nhận hoàn thành");
   if (task.assigneeChanged) labels.push("Đổi thông tin phân công");
+  if (task.dependenciesChanged) labels.push("Đổi tiên quyết");
   if (!task.previous) labels.push("Mới thêm");
   if (!task.revised) labels.push("Đã bỏ");
   return labels.length ? labels.join(" · ") : "Thiếu ngày dự kiến để đối chiếu";
@@ -145,12 +146,12 @@ function ComparisonDetails({ comparison, labels }: {
   );
 }
 
-export function PlanComparison({ plans }: { plans: PlanState }) {
+export function PlanComparison({ plans, proposalExplanation }: { plans: PlanState; proposalExplanation?: ReactNode }) {
   const [reference, setReference] = useState<ComparisonReference>("previous");
   const pair = comparisonPair(plans, reference);
   if (!pair) return <div className="empty-state">
     <GitCompareArrows size={18} aria-hidden="true" />
-    <div><p className="font-medium text-zinc-100">Chưa có hai lịch để so sánh</p><p>Gửi báo cáo tiến độ và đề xuất lịch mới để xem thay đổi.</p></div>
+    <div><p className="font-medium text-zinc-100">Chưa có hai lịch để so sánh</p><p>Gửi báo cáo tiến độ và đề xuất lịch mới để so sánh và giải thích thay đổi.</p></div>
   </div>;
   const comparison = comparePlans(pair.previous, pair.revised);
   const labels = LABELS[pair.mode];
@@ -177,9 +178,11 @@ export function PlanComparison({ plans }: { plans: PlanState }) {
       {pair.mode !== "proposal" && plans.acceptedRevision !== plans.revision && (
         <p className="notice warning">Đang so sánh các lịch đã chấp nhận. Hãy tính lại lịch để đánh giá dữ liệu vừa chỉnh sửa.</p>
       )}
+      {pair.mode !== "proposal" && <p className="helper">Trợ lý giải thích thay đổi hỗ trợ đề xuất hiện tại. Bạn đang xem lịch sử các lịch đã chấp nhận.</p>}
       {comparison ? (
         <>
           <ComparisonSummary comparison={comparison} labels={labels} />
+          {pair.mode === "proposal" && proposalExplanation}
           <ComparisonTimeline comparison={comparison} labels={labels} />
           <ComparisonDetails key={pair.mode} comparison={comparison} labels={labels} />
         </>

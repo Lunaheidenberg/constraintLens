@@ -12,6 +12,7 @@ interface SnapshotTask {
   name: string;
   assigneeId: string | null;
   assignee: string | null;
+  dependencies: ReadonlySet<string> | null;
   interval: PlannedInterval | null;
   done: boolean;
   actualFinish: string | null;
@@ -26,6 +27,7 @@ export interface TaskComparison {
   moved: boolean;
   unchanged: boolean;
   durationChanged: boolean;
+  dependenciesChanged: boolean;
   confirmed: boolean;
   newlyConfirmed: boolean;
   assigneeChanged: boolean;
@@ -52,6 +54,7 @@ function snapshotTasks(plan: Plan) {
     const work = scheduled.get(id);
     const completion = completed.get(id);
     const task = metadata.get(id);
+    const dependencies = task?.dependencies ?? work?.dependencies;
     const done = completion !== undefined || (plan.recovery !== null && task?.status === "Done");
     const assigneeId = completion?.assignee_id ?? work?.assignee_id ?? task?.assignee_id ?? null;
     let interval: PlannedInterval | null = null;
@@ -66,6 +69,7 @@ function snapshotTasks(plan: Plan) {
       name: task?.name ?? completion?.name ?? work?.name ?? id,
       assigneeId,
       assignee: assigneeId === null ? null : members.get(assigneeId) ?? assigneeId,
+      dependencies: dependencies ? new Set(dependencies) : null,
       interval,
       done,
       actualFinish: calendarDate(completion?.actual_finish_date),
@@ -90,11 +94,15 @@ function compareTask(id: string, previous: SnapshotTask | null, revised: Snapsho
   const startDelta = before && after ? dayOffset(before.start, after.start) : null;
   const finishDelta = before && after ? dayOffset(before.finalWorkDate, after.finalWorkDate) : null;
   const confirmed = !!revised?.actualFinish;
+  const beforeDependencies = previous?.dependencies;
+  const afterDependencies = revised?.dependencies;
   return {
     id, previous, revised, startDelta, finishDelta,
     moved: startDelta !== null && (startDelta !== 0 || finishDelta !== 0),
     unchanged: startDelta === 0 && finishDelta === 0,
     durationChanged: !!before && !!after && before.duration !== after.duration,
+    dependenciesChanged: !!beforeDependencies && !!afterDependencies &&
+      (beforeDependencies.size !== afterDependencies.size || [...afterDependencies].some((id) => !beforeDependencies.has(id))),
     confirmed,
     newlyConfirmed: confirmed && !previous?.actualFinish,
     assigneeChanged: !!previous && !!revised && (previous.assigneeId !== revised.assigneeId || previous.assignee !== revised.assignee),
@@ -143,5 +151,5 @@ export function comparePlans(previous: Plan, revised: Plan) {
 export type ScheduleComparison = NonNullable<ReturnType<typeof comparePlans>>;
 
 export function hasTaskChange(task: TaskComparison) {
-  return task.moved || task.newlyConfirmed || task.assigneeChanged || !task.previous || !task.revised;
+  return task.moved || task.newlyConfirmed || task.assigneeChanged || task.dependenciesChanged || !task.previous || !task.revised;
 }

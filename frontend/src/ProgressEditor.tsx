@@ -21,6 +21,8 @@ interface ProgressEditorProps {
   pendingMessage: string;
   feedback: { message: string; errors: string[] } | null;
   hasProposal: boolean;
+  hasPendingEdits: boolean;
+  confirmedAsOf: string;
   todoReview: ReturnType<typeof todoTasksDueForReview>;
   todoConfirmed: boolean;
   onConfirmTodo: (confirmed: boolean) => void;
@@ -49,6 +51,11 @@ export function ProgressEditor(props: ProgressEditorProps) {
         </div>
       ) : (
         <div className="space-y-3">
+          {props.hasPendingEdits && <div className="notice warning" role="status">
+            <p className="font-medium">Báo cáo tiến độ có thay đổi chưa được áp dụng.</p>
+            {props.confirmedAsOf && <p>Báo cáo gần nhất đã xác nhận đến hết <time dateTime={props.confirmedAsOf}>{formatDate(props.confirmedAsOf)}</time>.</p>}
+            <p>Chọn Đề xuất lịch mới để xác nhận báo cáo và tính lịch. Kiểm tra tiến độ chỉ kiểm tra dữ liệu.</p>
+          </div>}
           <div className="progress-dates">
             <DateField label="Tiến độ xác nhận đến hết ngày" value={asOfInput} min={minimumAsOf || undefined} max="9999-12-30"
               onChange={props.onDateChange} describedBy="reporting-boundary" />

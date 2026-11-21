@@ -19,7 +19,7 @@ export interface PlanState {
   previous: Plan | null;
   accepted: Plan | null;
   acceptedRevision: number | null;
-  todoConfirmed: boolean;
+  todoConfirmed: boolean | null;
   confirmedProgress: ConfirmedProgress | null;
   proposal: { revision: number; plan: Plan; source: "planning" | "progress" } | null;
   stale: boolean;
@@ -28,10 +28,11 @@ export interface PlanState {
 export interface ConfirmedProgress {
   snapshot: ProgressSnapshot;
   completedTasks: CompletedTask[];
+  reviewedTodoTaskIds: string[];
 }
 
 export const initialPlans: PlanState = {
-  revision: 0, baseline: null, previous: null, accepted: null, acceptedRevision: null, todoConfirmed: false,
+  revision: 0, baseline: null, previous: null, accepted: null, acceptedRevision: null, todoConfirmed: null,
   confirmedProgress: null, proposal: null, stale: false,
 };
 
@@ -61,7 +62,8 @@ export function comparisonPair(state: PlanState, reference: ComparisonReference 
 }
 
 type PlanAction =
-  | { type: "reset" | "inputsChanged" | "confirmTodo" | "cancel" | "accept" }
+  | { type: "reset" | "cancel" | "accept" }
+  | { type: "inputsChanged"; todoConfirmed?: boolean | null }
   | { type: "propose"; revision: number; plan: Plan; confirmation?: ConfirmedProgress };
 
 export function planReducer(state: PlanState, action: PlanAction): PlanState {
@@ -69,12 +71,12 @@ export function planReducer(state: PlanState, action: PlanAction): PlanState {
     case "reset":
       return { ...initialPlans, revision: state.revision + 1 };
     case "inputsChanged":
-      return { ...state, revision: state.revision + 1, todoConfirmed: false, proposal: null, stale: state.stale || state.proposal !== null };
-    case "confirmTodo":
-      return state.accepted ? { ...state, todoConfirmed: true } : state;
+      return {
+        ...state, revision: state.revision + 1, todoConfirmed: action.todoConfirmed ?? null,
+        proposal: null, stale: state.stale || state.proposal !== null,
+      };
     case "propose": {
-      if (action.revision !== state.revision) return state;
-      if (!hasSolution(action.plan.status)) return { ...state, proposal: null };
+      if (action.revision !== state.revision || !hasSolution(action.plan.status)) return state;
       const source = action.confirmation ? "progress" : "planning";
       return {
         ...state, proposal: { revision: action.revision, plan: action.plan, source }, stale: false,
@@ -88,7 +90,7 @@ export function planReducer(state: PlanState, action: PlanAction): PlanState {
       const plan = state.proposal.plan;
       return {
         ...state, baseline: state.baseline ?? plan, previous: state.accepted, accepted: plan,
-        acceptedRevision: state.revision, todoConfirmed: false, proposal: null, stale: false,
+        acceptedRevision: state.revision, todoConfirmed: null, proposal: null, stale: false,
       };
     }
   }

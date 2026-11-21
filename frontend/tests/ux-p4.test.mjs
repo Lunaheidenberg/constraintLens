@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { initialPlans, planReducer } from "../src/plans.ts";
 import {
-  collectTaskProgress, parseRemainingDuration, plannedRemainingDays, remainingDurationDifference,
+  collectTaskProgress, hasProgressReportEdits, parseRemainingDuration, plannedRemainingDays, remainingDurationDifference,
 } from "../src/progressReport.ts";
 
 const reportingDate = "2026-11-17";
@@ -16,6 +16,32 @@ const accepted = {
 };
 const auth = Object.freeze({ id: "T3", status: "Doing", duration: 4, assignee_id: "mai" });
 const cart = Object.freeze({ id: "T4", status: "Doing", duration: 3, assignee_id: "an" });
+
+test("F2: report comparison uses the reporting date, remaining days and actual finish dates", () => {
+  const done = { ...cart, status: "Done" };
+  const confirmed = {
+    progress_as_of_date: reportingDate,
+    task_progress: { [done.id]: { actual_finish_date: "2026-11-16" }, [auth.id]: { remaining_duration: 8 } },
+  };
+  const draft = (duration, finish) =>
+    collectTaskProgress([auth, done], new Map([[auth.id, duration], [done.id, finish]]), new Map());
+
+  assert.equal(hasProgressReportEdits("17/11/2026", draft("8", "16/11/2026"), confirmed), false);
+  assert.equal(hasProgressReportEdits(" 17/11/2026 ", draft("08", " 16/11/2026 "), confirmed), false);
+  assert.equal(hasProgressReportEdits("17/11/2026", draft("20", "16/11/2026"), confirmed), true);
+  assert.equal(hasProgressReportEdits("18/11/2026", draft("8", "16/11/2026"), confirmed), true);
+  assert.equal(hasProgressReportEdits("2026-11-17", draft("8", "16/11/2026"), confirmed), true);
+  assert.equal(hasProgressReportEdits("17/11/2026", draft("8", "15/11/2026"), confirmed), true);
+  assert.equal(hasProgressReportEdits("17/11/2026", draft("8", ""), confirmed), true);
+  assert.equal(hasProgressReportEdits("17/11/2026", draft("8", "31/11/2026"), confirmed), true);
+});
+
+test("F2: absent and blank entries are equivalent before the first report", () => {
+  const draft = collectTaskProgress([{ ...auth, status: "To Do" }], new Map([[auth.id, "8"]]), new Map());
+  assert.equal(hasProgressReportEdits(" ", draft, null), false);
+  assert.equal(hasProgressReportEdits("17/", draft, null), true);
+  assert.equal(hasProgressReportEdits("17/11/2026", draft, null), true);
+});
 
 test("P1: Nov 17 closes the reporting day; Auth has Nov 18 and 19 left", () => {
   assert.equal(plannedRemainingDays(accepted, reportingDate).get("T3"), 2);

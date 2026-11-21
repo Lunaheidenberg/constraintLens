@@ -113,23 +113,31 @@ test("status changes are measured against the accepted snapshot until another pl
   assert.equal(hasUnscheduledStatusChanges(planReducer(preview, { type: "accept" }).accepted, changed), false);
 });
 
-test("P6, P8–P10: confirmation survives proposal cancellation and resets on input changes or accepting a plan", () => {
-  const propose = (state, plan) => planReducer(state, { type: "propose", revision: state.revision, plan });
+test("P6, P8–P10 and F2: cancellation preserves the submitted checklist and edits invalidate proposals", () => {
+  const propose = (state, plan, confirmation) =>
+    planReducer(state, { type: "propose", revision: state.revision, plan, confirmation });
   const active = planReducer(propose(initialPlans, accepted), { type: "accept" });
-  assert.equal(planReducer(initialPlans, { type: "confirmTodo" }).todoConfirmed, false);
-  const confirmed = planReducer(active, { type: "confirmTodo" });
+  const confirmed = planReducer(active, { type: "inputsChanged", todoConfirmed: true });
   assert.equal(confirmed.todoConfirmed, true);
-  assert.equal(planReducer(confirmed, { type: "inputsChanged" }).todoConfirmed, false);
-  assert.equal(planReducer(confirmed, { type: "reset" }).todoConfirmed, false);
+  assert.equal(planReducer(confirmed, { type: "inputsChanged" }).todoConfirmed, null);
+  assert.equal(planReducer(confirmed, { type: "reset" }).todoConfirmed, null);
 
   const revised = { ...accepted, scheduledTasks: [{ id: "T4", start_day: 6 }] };
-  const preview = propose(confirmed, revised);
+  const report = {
+    snapshot: { progress_as_of_date: "2026-11-17", task_progress: {} }, completedTasks: [], reviewedTodoTaskIds: ["T4"],
+  };
+  const preview = propose(confirmed, revised, report);
   assert.equal(preview.accepted, accepted);
   const canceled = planReducer(preview, { type: "cancel" });
   assert.equal(canceled.todoConfirmed, true);
   assert.equal(canceled.accepted, accepted);
+  assert.equal(canceled.confirmedProgress, report);
+  const revoked = planReducer(preview, { type: "inputsChanged", todoConfirmed: false });
+  assert.equal(revoked.todoConfirmed, false);
+  assert.equal(revoked.confirmedProgress, report);
+  assert.equal(planReducer(revoked, { type: "accept" }).accepted, accepted);
   const applied = planReducer(preview, { type: "accept" });
-  assert.equal(applied.todoConfirmed, false);
+  assert.equal(applied.todoConfirmed, null);
   assert.equal(applied.previous, accepted);
   assert.deepEqual(todoTasksDueForReview(applied.accepted, tasks, "2026-11-17"), []);
 });
