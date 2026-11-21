@@ -8,6 +8,7 @@ Cung cấp các API:
   - POST /api/parse/draft, /api/parse/confirm : Tạo và xác nhận bản nháp Gemini
   - POST /api/planning/clarify, /api/planning/draft : Làm rõ mục tiêu và đề xuất kế hoạch
   - GET /api/help/topics, POST /api/help/ask : Tra cứu hướng dẫn sử dụng
+  - POST /api/recovery/explain : Giải thích lịch và tiến độ từ snapshot của client
   - POST /api/validate : Kiểm tra tính toàn vẹn và chu trình đồ thị (DAG Cycle)
   - POST /api/solve    : Giải RCPSP bằng CP-SAT và phân tích What-If Counterfactual
   - POST /api/reschedule : Lập lại lịch theo tiến độ cuối ngày đã xác nhận
@@ -29,6 +30,7 @@ from parser import GeminiDraftError, _draft_model, clarify_project, parse_kanban
 from planning_draft import ClarificationResult, ClarifyPlanningRequest, GeneratePlanningRequest, PlanningResult
 from project_calendar import CalendarFinish, ProjectCalendar, calendar_finish, calendar_range_errors
 from project_draft import ProjectDraft
+from recovery_api import create_recovery_router
 from solver import RescheduleResult, ScheduleResult, SchedulingMode, reschedule_project, solve_schedule
 from validator import validate_ir, validate_progress
 
@@ -307,6 +309,7 @@ async def generate_planning_draft(payload: GeneratePlanningRequest):
 
 app.include_router(planning_router)
 app.include_router(create_help_router(lambda: _get_gemini_api_key(), _draft_model))
+app.include_router(create_recovery_router(lambda: _get_gemini_api_key(), _draft_model))
 
 
 @app.post("/api/validate", response_model=ValidateResponse)

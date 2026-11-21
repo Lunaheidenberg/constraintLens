@@ -216,7 +216,78 @@ class PlanningParserTests(unittest.IsolatedAsyncioTestCase):
         plan = await self.plan(output, order + ".", [
             {"id": "Q1", "question": "Any corrections?", "answer": "Test API is independent."},
         ])
-        self.assertEqual(plan.draft.tasks[1].dependency_review, "suggested")
+        self.assertEqual((plan.draft.tasks[1].dependencies, plan.draft.tasks[1].dependency_review), (None, "missing"))
+
+    async def test_dependency_corrections_do_not_require_a_provider_citation(self):
+        for description, answer, first, second, expected, quote in (
+            ("Test API runs after Build API.", "Correction: Test API depends on Prepare fixtures.",
+             "Build API", "Test API", ["T3"], "invented quote"),
+            ("Test API runs after Build API.", "Test API runs after Prepare fixtures instead of Build API.",
+             "Build API", "Test API", ["T3"], None),
+            ("Kiểm thử API chạy sau khi Xây API.", "Đính chính: Kiểm thử API không cần công việc tiên quyết.",
+             "Xây API", "Kiểm thử API", [], "Kiểm thử API chạy sau khi Xây API."),
+            ("Kiểm thử API chạy sau khi Xây API và Prepare fixtures.",
+             "Đính chính: Kiểm thử API không còn phụ thuộc vào Xây API.",
+             "Xây API", "Kiểm thử API", ["T3"], None),
+        ):
+            with self.subTest(answer=answer):
+                output = english_plan()
+                output["tasks"][0]["name"] = first
+                output["tasks"][1].update(name=second, dependency_quote=quote)
+                output["tasks"].append(task("T3", "Prepare fixtures", "QA", 1, []))
+                plan = await self.plan(output, description, [
+                    {"id": "Q2", "question": "Any correction?", "answer": answer},
+                ])
+                corrected = plan.draft.tasks[1]
+                self.assertEqual((corrected.dependencies, corrected.dependency_review), (expected, "provided"))
+                self.assertEqual(plan.sources.tasks["T2"].dependencies.model_dump(), {"kind": "answer", "question_id": "Q2"})
+                self.assertEqual(plan.draft.tasks[2].dependency_review, "suggested")
+
+    async def test_unrelated_clarification_preserves_grounded_dependency(self):
+        output = english_plan()
+        order = "Test API runs after Build API."
+        output["tasks"][1]["dependency_quote"] = order
+        plan = await self.plan(output, order, [
+            {"id": "Q1", "question": "Any correction?", "answer": "Correction: Test API takes 4 days."},
+        ])
+        self.assertEqual((plan.draft.tasks[1].dependencies, plan.draft.tasks[1].dependency_review), (["T1"], "provided"))
+        self.assertEqual(plan.sources.tasks["T2"].dependencies.kind, "description")
+
+    async def test_replacing_one_predecessor_preserves_the_others(self):
+        output = english_plan()
+        output["tasks"].extend([
+            task("T3", "Prepare fixtures", "QA", 1, []),
+            task("T4", "Set up test data", "QA", 1, []),
+        ])
+        answer = "Test API runs after Prepare fixtures instead of Build API."
+        for description, expected in (
+            ("Test API runs after Build API and Set up test data.", ["T3", "T4"]),
+            ("Test API has some prerequisites.", None),
+        ):
+            with self.subTest(description=description):
+                plan = await self.plan(output, description, [
+                    {"id": "Q1", "question": "Any correction?", "answer": answer},
+                ])
+                corrected = plan.draft.tasks[1]
+                self.assertEqual((corrected.dependencies, corrected.dependency_review),
+                                 (expected, "missing" if expected is None else "provided"))
+
+    async def test_duplicate_or_partial_task_name_requires_review(self):
+        for answer in ("Correction: Test API has no prerequisites.", "Correction: Test has no prerequisites."):
+            with self.subTest(answer=answer):
+                output = english_plan()
+                order = "Test API runs after Build API."
+                output["tasks"][1]["dependency_quote"] = order
+                output["tasks"].append(task("T3", "Test API", "QA", 1, ["T1"], dependency_quote=order))
+                output["tasks"].append(task("T4", "Deploy", "Ops", 1, ["T1"], dependency_quote="Deploy runs after Build API."))
+                plan = await self.plan(output, order + " Deploy runs after Build API.", [
+                    {"id": "Q1", "question": "Any correction?", "answer": answer},
+                ])
+                for item in plan.draft.tasks[1:3]:
+                    self.assertEqual((item.dependencies, item.dependency_review), (None, "missing"))
+                    self.assertEqual(plan.sources.tasks[item.id].dependencies.kind, "unknown")
+                deploy = plan.draft.tasks[3]
+                self.assertEqual((deploy.dependencies, deploy.dependency_review), (["T1"], "provided"))
 
     async def test_partial_prerequisite_list_cannot_be_marked_provided(self):
         order = "Test API runs after Build API and Prepare fixtures"
@@ -534,6 +605,76 @@ class PlanningApiTests(unittest.IsolatedAsyncioTestCase):
                     confirmed = await self.client.post("/api/parse/confirm", json=draft)
                 self.assertEqual(confirmed.raise_for_status().json()["tasks"][0]["duration"], expected or 6)
 
+    async def test_dependency_correction_through_confirmation_and_cp_sat(self):
+        order = "Test API runs after Build API."
+        output = english_plan()
+        output["tasks"][1]["dependency_quote"] = order
+        self.generate.return_value = response(output)
+
+        for answers, expected, finish, late in (
+            ([], ["T1"], "2026-11-05", 2),
+            (["Correction: Test API has no prerequisites."], [], "2026-11-03", 0),
+            (["Correction: it has no prerequisites."], None, "2026-11-03", 0),
+            (["Correction: Test API runs after Build API or Prepare fixtures."], None, "2026-11-03", 0),
+            (["Correction: Test API has no prerequisites.", "Test API depends on Build API."], None, "2026-11-03", 0),
+        ):
+            with self.subTest(answers=answers):
+                planned = (await self.client.post("/api/planning/draft", json={
+                    "prompt": order,
+                    "clarifications": [
+                        {"id": f"Q{index}", "question": "Any correction?", "answer": answer}
+                        for index, answer in enumerate(answers, 1)
+                    ],
+                })).raise_for_status().json()
+                draft = planned["draft"]
+                second = draft["tasks"][1]
+                self.assertEqual(second["dependencies"], expected)
+                review = "missing" if expected is None else "provided"
+                self.assertEqual(second["dependency_review"], review)
+                source = "unknown" if expected is None else "answer" if answers else "description"
+                origin = {"kind": source, "question_id": "Q1" if source == "answer" else None}
+                self.assertEqual(planned["sources"]["tasks"]["T2"]["dependencies"], origin)
+
+                # Mirror React's bulk confirmation of concrete suggestions.
+                for item in draft["tasks"]:
+                    for field, review in (("duration", "duration_review"), ("dependencies", "dependency_review")):
+                        if item[field] is not None and item[review] == "suggested":
+                            item[review] = "confirmed"
+                confirmation = await self.client.post("/api/parse/confirm", json=draft)
+                if expected is None:
+                    self.assertEqual(confirmation.status_code, 422)
+                    second.update(dependencies=[], dependency_review="confirmed")
+                    confirmation = await self.client.post("/api/parse/confirm", json=draft)
+                ir = confirmation.raise_for_status().json()
+                self.assertEqual(ir["tasks"][1]["dependencies"], expected or [])
+                ir["members"] = [{"id": name, "name": name} for name in ("An", "Binh")]
+                for item, member in zip(ir["tasks"], ir["members"]):
+                    item["assignee_id"] = member["id"]
+                solved = (await self.client.post("/api/solve", json={
+                    "ir": ir, "scheduling_mode": "member",
+                    "calendar": {"project_start_date": "2026-11-01", "target_deadline_date": "2026-11-03"},
+                })).raise_for_status().json()
+                self.assertEqual(solved["result"]["status"], "OPTIMAL")
+                self.assertEqual((solved["calendar"]["final_work_date"], solved["calendar"]["days_late"]), (finish, late))
+
+    async def test_confirmation_still_rejects_a_cycle_after_reconciliation(self):
+        self.generate.return_value = response(english_plan())
+        planned = (await self.client.post("/api/planning/draft", json={
+            "prompt": "Test API runs after Build API.",
+            "clarifications": [{
+                "id": "Q1", "question": "Any correction?", "answer": "Correction: Build API runs after Test API.",
+            }],
+        })).raise_for_status().json()
+        draft = planned["draft"]
+        self.assertEqual(draft["tasks"][0]["dependencies"], ["T2"])
+        for item in draft["tasks"]:
+            item["duration_review"] = "confirmed"
+            if item["dependency_review"] == "suggested":
+                item["dependency_review"] = "confirmed"
+        confirmation = await self.client.post("/api/parse/confirm", json=draft)
+        self.assertEqual(confirmation.status_code, 422)
+        self.assertIn("Cycle", confirmation.json()["detail"])
+
     async def test_input_errors_are_sanitized_and_provider_errors_are_mapped(self):
         for payload in (
             {"prompt": "  "},
@@ -549,3 +690,94 @@ class PlanningApiTests(unittest.IsolatedAsyncioTestCase):
         failure = await self.client.post("/api/planning/clarify", json={"prompt": EN_PROMPT})
         self.assertEqual(failure.status_code, 504)
         self.assertNotIn("sensitive", failure.text)
+
+    async def test_duplicate_prerequisites_from_planning_through_solver_and_recovery(self):
+        order = "Test API runs after Build API."
+        output = english_plan()
+        output["tasks"][1].update(dependencies=["T1", "T1"], dependency_quote=order)
+        self.generate.return_value = response(output)
+        planned = (await self.client.post("/api/planning/draft", json={"prompt": order})).raise_for_status().json()
+        draft = planned["draft"]
+        first, second = draft["tasks"]
+        self.assertEqual(first["dependencies"], [])
+        self.assertEqual((second["dependencies"], second["dependency_review"]), (["T1", "T1"], "provided"))
+        self.assertEqual(planned["sources"]["tasks"]["T2"]["dependencies"]["kind"], "description")
+        self.assertEqual((await self.client.post("/api/parse/confirm", json=draft)).status_code, 422)
+        first["dependency_review"] = "confirmed"
+        for item in draft["tasks"]:
+            item["duration_review"] = "confirmed"
+        confirmation = await self.client.post("/api/parse/confirm", json=draft)
+        ir = confirmation.raise_for_status().json()
+        ir["members"] = [{"id": name, "name": name} for name in ("An", "Binh")]
+        for item, member in zip(ir["tasks"], ir["members"]):
+            item["assignee_id"] = member["id"]
+        calendar = {"project_start_date": "2026-11-01", "target_deadline_date": "2026-11-05"}
+
+        async def solve():
+            return (await self.client.post("/api/solve", json={
+                "ir": ir, "scheduling_mode": "member", "calendar": calendar,
+            })).raise_for_status().json()
+
+        confirmed_edges = ir["tasks"][1]["dependencies"]
+        proposed = await solve()
+        ir["tasks"][1]["dependencies"] = ["T1", "T1"]
+        historical = await solve()
+        self.assertEqual(proposed["calendar"], historical["calendar"])
+        self.assertEqual(proposed["calendar"]["final_work_date"], "2026-11-05")
+
+        def snapshot(ref, solved, edges):
+            return {
+                "project_ref": "bookstore", "snapshot_ref": ref, "calendar": calendar, "status": solved["result"]["status"],
+                "tasks": [
+                    {"id": item["id"], "estimated_duration": item["duration"], "assignee_id": item["assignee_id"],
+                     "dependencies": edges if item["id"] == "T2" else []}
+                    for item in ir["tasks"]
+                ],
+                "scheduled_tasks": [
+                    {"task_id": item["id"], "start_day": item["start_day"], "end_day": item["end_day"]}
+                    for item in solved["result"]["scheduled_tasks"]
+                ],
+            }
+
+        recovered = await self.client.post("/api/recovery/explain", json={
+            "context_ref": "duplicate-prerequisites", "question": "What does Test API depend on?", "intent": "dependencies",
+            "accepted": snapshot("previous", historical, ["T1", "T1"]),
+            "proposal": snapshot("new", proposed, confirmed_edges),
+        })
+        self.assertEqual((confirmation.status_code, proposed["result"]["status"], recovered.status_code),
+                         (200, "OPTIMAL", 200), recovered.text)
+        self.assertEqual(confirmed_edges, ["T1"])
+        self.assertEqual(proposed["result"]["scheduled_tasks"], historical["result"]["scheduled_tasks"])
+        self.assertEqual(historical["result"]["scheduled_tasks"][1]["dependencies"], ["T1"])
+        result = recovered.json()
+        self.assertEqual([fact["id"] for fact in result["facts"] if fact["kind"] == "dependency"],
+                         ["accepted:dependency:T1:T2", "proposal:dependency:T1:T2"])
+        self.assertTrue(next(fact for fact in result["facts"] if fact["kind"] == "schedule_change")["data"]["no_changes"])
+        self.assertEqual(result["ai_status"], "skipped")
+
+    async def test_confirmation_preserves_distinct_edges_and_rejects_invalid_ones(self):
+        output = english_plan()
+        output["tasks"].append(task("T3", "Prepare fixtures", "QA", 1, []))
+        self.generate.return_value = response(output)
+        planned = (await self.client.post("/api/planning/draft", json={"prompt": EN_PROMPT})).raise_for_status().json()
+        draft = planned["draft"]
+        for item in draft["tasks"]:
+            item.update(duration_review="confirmed", dependency_review="confirmed")
+        first, second, _ = draft["tasks"]
+        second["dependencies"] = ["T3", "T1", "T3", "T1"]
+        result = await self.client.post("/api/parse/confirm", json=draft)
+        self.assertEqual(result.raise_for_status().json()["tasks"][1]["dependencies"], ["T3", "T1"])
+
+        for before, after, message in (
+            ([], ["ghost", "ghost"], "không tồn tại"),
+            ([], ["T2", "T2"], "không thể tự phụ thuộc"),
+            (["T2"], ["T1", "T1"], "Cycle"),
+            ([], [1, 1], "string_type"),
+            ([], [" T1 ", " T1 "], "string_pattern_mismatch"),
+            ([], None, "Xác nhận công việc tiên quyết"),
+        ):
+            with self.subTest(dependencies=after):
+                first["dependencies"], second["dependencies"] = before, after
+                rejected = await self.client.post("/api/parse/confirm", json=draft)
+                self.assertEqual(rejected.status_code, 422)
+                self.assertIn(message, str(rejected.json()["detail"]))

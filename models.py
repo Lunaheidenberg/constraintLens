@@ -1,10 +1,15 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Dict, Literal
 
 from project_calendar import CalendarDate
 
 
 KanbanStatus = Literal["To Do", "Doing", "Done"]
+
+
+def canonical_dependency_ids(dependencies: list[str]) -> list[str]:
+    """Copy validated prerequisite IDs, keeping the first occurrence of each edge."""
+    return list(dict.fromkeys(dependencies))
 
 
 class ProjectMember(BaseModel):
@@ -28,6 +33,7 @@ class Task(BaseModel):
     assignee_id: str | None = Field(
         default=None, description="ID thành viên do người dùng phân công; null nếu chưa phân công"
     )
+    _canonicalize_dependencies = field_validator("dependencies")(canonical_dependency_ids)
 
 
 # team_capacity, kanban_config và kanban_stage duy trì hợp đồng WIP hiện tại.

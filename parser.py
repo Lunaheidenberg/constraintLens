@@ -642,33 +642,133 @@ def _planning_duration(
     return task.duration, FieldSource(kind="unknown" if task.duration is None else "ai")
 
 
-def _explicit_dependencies(clause: str, task_id: str, names: dict[str, str]) -> set[str] | None:
-    if _UNCERTAIN.search(clause):
-        return None
-    statement = clause.rstrip(".!")
-    name = re.escape(names[task_id])
-    independence = rf"{name}[\s:–-]+(?:(?:has|is|runs?|là|chạy)\s+)?{_INDEPENDENT.pattern}"
-    if re.fullmatch(independence, statement, re.IGNORECASE):
-        return set()
-    if _NEGATED.search(clause) or _INDEPENDENT.search(clause):
-        return None
-    # Chỉ công nhận câu nêu trọn danh sách tiên quyết, gồm các tên nhận diện được.
+_DEPENDENCY_CORRECTION = re.compile(r"^(?:correction|actually|đính chính|sửa lại|thực ra)(?:\s*[:,]\s*|\s+)", re.IGNORECASE)
+_DEPENDENCY_REPLACEMENT = re.compile(r"\s+(?:instead(?: of\s+(.+))?|thay vì\s+(.+))$", re.IGNORECASE)
+_DEPENDENCY_HEDGE = re.compile(r"^(?:maybe|perhaps|có thể|có lẽ)\s+", re.IGNORECASE)
+_DEPENDENCY_PRONOUN = re.compile(r"(?:it|(?:this|that|the) task|(?:công )?việc (?:này|đó))", re.IGNORECASE)
+_PLANNING_INDEPENDENT = (
+    rf"(?:{_INDEPENDENT.pattern}|does not have (?:any )?prerequisites|"
+    r"không (?:có|cần) (?:bất kỳ )?công việc tiên quyết(?: nào)?|"
+    r"không (?:cần )?phụ thuộc(?: vào)? (?:công )?việc nào)"
+)
+
+
+def _dependency_statement(statement: str, name: str) -> re.Match[str] | None:
+    target = rf"(?P<target>{name})"
     verb = r"(?:starts?|runs?|comes?|bắt đầu|chạy|thực hiện)"
-    match = (
-        re.fullmatch(rf"{name}\s+(?:{verb}\s+)?{_AFTER}\s+(.+)", statement, re.IGNORECASE)
-        or re.fullmatch(rf"(.+?)\s+{_BEFORE}\s+{name}", statement, re.IGNORECASE)
-        or re.fullmatch(rf"(?:after|once|sau khi)\s+(.+?),\s+{name}(?:\s+{verb})?", statement, re.IGNORECASE)
+    removal = r"(?:no longer (?:depends? on|needs?)|(?:does not|doesn't) depend on|không (?:còn )?phụ thuộc(?: vào)?)"
+    return (
+        re.fullmatch(rf"{target}[\s:–-]+(?:(?:has|is|runs?|là|chạy)\s+)?{_PLANNING_INDEPENDENT}", statement, re.IGNORECASE)
+        or re.fullmatch(rf"{target}\s+{removal}\s+(?P<removed>.+)", statement, re.IGNORECASE)
+        or re.fullmatch(rf"{target}\s+(?:{verb}\s+)?{_AFTER}\s+(?P<predecessors>.+)", statement, re.IGNORECASE)
+        or re.fullmatch(rf"(?P<predecessors>.+?)\s+{_BEFORE}\s+{target}", statement, re.IGNORECASE)
+        or re.fullmatch(rf"(?:after|once|sau khi)\s+(?P<predecessors>.+?),\s+{target}(?:\s+{verb})?", statement, re.IGNORECASE)
     )
-    if not match:
+
+
+def _prerequisite_ids(phrase: str, task_id: str, ids_by_name: dict[str, list[str]]) -> frozenset[str] | None:
+    phrase = phrase.strip().casefold()
+    parts = [phrase] if phrase in ids_by_name else re.split(r",\s*(?:(?:and|và)\s+)?|\s+(?:and|và)\s+", phrase)
+    matches = [ids_by_name.get(part.strip(), []) for part in parts]
+    if any(len(ids) != 1 or task_id in ids for ids in matches):
         return None
-    labels = {id_: label.casefold() for id_, label in names.items()}
-    phrase = match[1].strip().casefold()
-    parts = [phrase] if phrase in labels.values() else re.split(r",\s*(?:(?:and|và)\s+)?|\s+(?:and|và)\s+", phrase)
-    prerequisites = {part.strip() for part in parts}
-    known = {id_: label for id_, label in labels.items() if label in prerequisites}
-    if task_id in known or len(known) != len(prerequisites) or set(known.values()) != prerequisites:
+    return frozenset(ids[0] for ids in matches)
+
+
+_DependencyClaim = tuple[frozenset[str] | None, FieldSource, str, bool]
+
+
+def _replace_prerequisites(
+    claims: list[_DependencyClaim], removed: frozenset[str] | None, added: frozenset[str] | None,
+) -> frozenset[str] | None:
+    # Bỏ hoặc thay cạnh cụ thể chỉ khi mô tả nêu rõ tập tiên quyết ban đầu.
+    baseline = {value for value, origin, _, _ in claims if origin.kind == "description"}
+    if len(baseline) != 1 or removed is None or added is None:
         return None
-    return set(known)
+    prior = next(iter(baseline))
+    return (prior - removed) | added if prior is not None and removed <= prior else None
+
+
+def _planning_dependency_claims(clauses: _EvidenceClauses, names: dict[str, str]) -> dict[str, list[_DependencyClaim]]:
+    ids_by_name: dict[str, list[str]] = {}
+    for task_id, name in names.items():
+        ids_by_name.setdefault(name.casefold(), []).append(task_id)
+    target_pattern = "|".join(re.escape(name) for name in sorted(set(names.values()), key=len, reverse=True))
+    claims: dict[str, list[_DependencyClaim]] = {task_id: [] for task_id in names}
+
+    for clause, source in clauses:
+        statement = clause.rstrip(".!?")
+        from_answer = source.kind == "answer"
+        prefix = _DEPENDENCY_CORRECTION.match(statement) if from_answer else None
+        if prefix:
+            statement = statement[prefix.end():]
+        replacement = _DEPENDENCY_REPLACEMENT.search(statement) if from_answer else None
+        if replacement:
+            statement = statement[:replacement.start()]
+        subject_statement = _DEPENDENCY_HEDGE.sub("", statement)
+        match = _dependency_statement(subject_statement, target_pattern)
+        if match is None and (prefix or replacement):
+            match = _dependency_statement(subject_statement, r".+?")
+        if match is None:
+            continue
+
+        target = match["target"].casefold()
+        target_ids = ids_by_name.get(target, [])
+        fields = match.groupdict()
+        removed = fields.get("removed")
+        correction = from_answer and bool(prefix or replacement or removed)
+        if len(target_ids) != 1:
+            if correction:
+                # Tên mơ hồ chỉ dùng để tìm các trường cần duyệt, không để chọn một công việc.
+                if _DEPENDENCY_PRONOUN.fullmatch(target):
+                    target_ids = [task_id for task_id, items in claims.items()
+                                  if any(origin.kind == "description" for _, origin, _, _ in items)]
+                elif not target_ids:
+                    target_ids = [task_id for task_id, name in names.items()
+                                  if re.search(_name_pattern(target), name, re.IGNORECASE)
+                                  or re.search(_name_pattern(name), target, re.IGNORECASE)]
+                for task_id in target_ids:
+                    claims[task_id].append((None, source, clause, True))
+            continue
+
+        task_id = target_ids[0]
+        value = None
+        predecessors = fields.get("predecessors")
+        if not _UNCERTAIN.search(clause):
+            if removed and correction:
+                if not replacement:
+                    value = _replace_prerequisites(claims[task_id], _prerequisite_ids(removed, task_id, ids_by_name), frozenset())
+            elif predecessors:
+                if not (_NEGATED.search(statement) or _INDEPENDENT.search(statement)):
+                    value = _prerequisite_ids(predecessors, task_id, ids_by_name)
+                    obsolete = (replacement[1] or replacement[2]) if replacement else None
+                    if obsolete:
+                        value = _replace_prerequisites(claims[task_id], _prerequisite_ids(obsolete, task_id, ids_by_name), value)
+            elif not removed and not replacement:
+                value = frozenset()
+        claims[task_id].append((value, source, clause, correction))
+    return claims
+
+
+def _planning_dependencies(task: PlannedTask, claims: list[_DependencyClaim]) -> tuple[list[str] | None, FieldSource]:
+    answers = [(value, source, correction) for value, source, _, correction in claims if source.kind == "answer"]
+    answer_values = {value for value, _, _ in answers}
+    for value, source, correction in answers:
+        if correction and value is not None and answer_values == {value}:
+            return sorted(value), source
+
+    expected = None if task.dependencies is None else frozenset(task.dependencies)
+    if answers and (None in answer_values or answer_values != {expected}
+                    or any(value is not None and value != expected for value, _, _, _ in claims)):
+        return None, FieldSource(kind="unknown")
+
+    facts = {clause: value for value, _, clause, _ in claims}
+    consistent = all(value is None or value == expected for value in facts.values())
+    source = _field_source(
+        task.dependencies, task.dependency_quote, [(clause, source) for _, source, clause, _ in claims],
+        lambda clause: consistent and facts[clause] == expected,
+    )
+    return task.dependencies, source
 
 
 def _validate_planned_tasks(plan: GeminiPlan) -> None:
@@ -685,23 +785,15 @@ async def propose_project_plan(request: GeneratePlanningRequest, api_key: str) -
     names = {task.id: task.name for task in plan.tasks}
     folded_names = [name.casefold() for name in names.values()]
     clauses = _evidence_clauses(request)
+    dependency_claims = _planning_dependency_claims(clauses, names)
     tasks: list[DraftTask] = []
     task_sources: dict[str, TaskSources] = {}
     for task in plan.tasks:
         duration, duration_source = _planning_duration(task, folded_names.count(task.name.casefold()) == 1, clauses)
-        prerequisite_facts = {
-            clause: _explicit_dependencies(clause, task.id, names)
-            for clause, _ in clauses
-        } if task.dependency_quote else {}
-        expected_prerequisites = set(task.dependencies or ())
-        consistent = all(fact is None or fact == expected_prerequisites for fact in prerequisite_facts.values())
-        dependency_source = _field_source(
-            task.dependencies, task.dependency_quote, clauses,
-            lambda clause: consistent and prerequisite_facts[clause] == expected_prerequisites,
-        )
+        dependencies, dependency_source = _planning_dependencies(task, dependency_claims[task.id])
         tasks.append(DraftTask(
             id=task.id, name=task.name, category=task.category, duration=duration,
-            dependencies=task.dependencies, duration_review=_draft_review(duration_source),
+            dependencies=dependencies, duration_review=_draft_review(duration_source),
             dependency_review=_draft_review(dependency_source),
         ))
         category_pattern = rf"{_name_pattern(task.name)}[\s:–-]+(?:belongs to|is in|thuộc(?: nhóm)?)\s+{_name_pattern(task.category)}"
