@@ -8,12 +8,15 @@ authors = [
 ]
 requires-python = ">=3.11,<3.14"
 dependencies = [
+    "fastapi>=0.162.2",
     "google-genai>=2.34.0",
+    "httpx>=0.28.1",
     "ortools>=9.11.4210",
     "pandas>=3.1.1",
     "plotly>=7.1.0",
     "pydantic>=2.14.3",
     "streamlit>=1.67.0",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]

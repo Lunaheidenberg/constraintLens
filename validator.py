@@ -11,7 +11,8 @@ Quy tắc kiến trúc (architecture.md):
 """
 
 from typing import List, Dict, Set, Tuple, Optional
-from models import SchedulingIR, KanbanConfig, Task
+from models import SchedulingIR, KanbanConfig, ProgressSnapshot, Task, TaskProgress
+from project_calendar import ProjectCalendar, calendar_range_errors, end_of_day_boundary
 
 
 class SchedulingValidationError(Exception):
@@ -41,33 +42,30 @@ def _normalize_cycle(cycle_nodes: list[str]) -> tuple[str, ...]:
     return tuple(rotated)
 
 
-def validate_ir(ir: SchedulingIR, raise_on_error: bool = False) -> list[str]:
+def validate_ir(
+    ir: SchedulingIR, raise_on_error: bool = False, *, require_assignments: bool = False
+) -> list[str]:
     """
     Kiểm tra toàn diện tính hợp lệ của đối tượng SchedulingIR trước khi giải bài toán.
 
     Thu thập TOÀN BỘ lỗi logic mà không dừng sớm, bao gồm:
-    1. Kiểm tra danh sách rỗng (tasks, kanban stages) & trùng lặp Task ID.
-    2. Kiểm tra tính toàn vẹn cột Kanban & WIP Limits (phạm vi giá trị, tên cột hợp lệ).
+    1. Kiểm tra danh sách tasks rỗng & trùng lặp Task ID.
+    2. Trong chế độ cũ, kiểm tra tính toàn vẹn cột Kanban & WIP Limits.
     3. Kiểm tra tính toàn vẹn tham chiếu phụ thuộc (không tự phụ thuộc, không phụ thuộc ID ma).
     4. Phát hiện chu trình phụ thuộc vòng tròn bằng thuật toán DFS 3 màu (DAG Cycle Detection).
+    5. Kiểm tra ID thành viên duy nhất và tham chiếu người được phân công.
 
     Args:
         ir: Đối tượng SchedulingIR cần kiểm tra.
         raise_on_error: Nếu True và có lỗi, ném ra ngoại lệ SchedulingValidationError(errors).
                         Mặc định là False (chỉ trả về danh sách lỗi).
+        require_assignments: Kiểm tra lịch theo thành viên. Mỗi task phải có người
+                             phụ trách và không áp dụng các quy tắc WIP cũ.
 
     Returns:
         list[str]: Danh sách các chuỗi thông báo lỗi bằng tiếng Việt (rỗng [] nếu hợp lệ).
     """
     errors: list[str] = []
-
-    # Truy xuất an toàn cấu hình Kanban (tương thích kanban_config hoặc kanban)
-    kanban: Optional[KanbanConfig] = getattr(ir, "kanban_config", None)
-    if kanban is None:
-        kanban = getattr(ir, "kanban", None)
-
-    stages: list[str] = getattr(kanban, "stages", []) if kanban else []
-    wip_limits: dict[str, int] = getattr(kanban, "wip_limits", {}) if kanban else {}
 
     # =========================================================================
     # CHỐT CHẶN 1: Kiểm tra Danh sách rỗng & Trùng lặp ID (ID Uniqueness)
@@ -76,9 +74,6 @@ def validate_ir(ir: SchedulingIR, raise_on_error: bool = False) -> list[str]:
 
     if not tasks:
         errors.append("Danh sách công việc (ir.tasks) không được để rỗng.")
-
-    if not stages:
-        errors.append("Danh sách các cột Kanban (ir.kanban.stages) không được để rỗng.")
 
     # Kiểm tra trùng lặp Task ID
     seen_task_ids: set[str] = set()
@@ -94,48 +89,58 @@ def validate_ir(ir: SchedulingIR, raise_on_error: bool = False) -> list[str]:
             f"Mã công việc (Task ID) '{dup_id}' bị trùng lặp. Mỗi task phải có một ID duy nhất."
         )
 
+    member_ids: set[str] = set()
+    for member in ir.members:
+        if member.id in member_ids:
+            errors.append(f"Mã thành viên '{member.id}' bị trùng lặp. Hãy dùng một ID duy nhất cho mỗi thành viên.")
+        member_ids.add(member.id)
+
+    for task in tasks:
+        if task.assignee_id is None:
+            if require_assignments:
+                errors.append(f"Task '{task.id}' chưa được phân công. Hãy chọn một thành viên cho task này.")
+        elif task.assignee_id not in member_ids:
+            errors.append(
+                f"Task '{task.id}' được giao cho ID '{task.assignee_id}' không có trong danh sách thành viên. "
+                "Hãy chọn một thành viên hiện có hoặc thêm người phụ trách vào danh sách thành viên."
+            )
+
     # =========================================================================
     # CHỐT CHẶN 2: Kiểm tra Tính toàn vẹn cột Kanban & WIP Limits (Kanban Integrity)
     # =========================================================================
-    stages_set = set(stages)
+    if not require_assignments:
+        errors.extend(_validate_legacy_kanban(ir, tasks))
 
-    # 2.1 Mọi task.kanban_stage phải nằm trong ir.kanban.stages
-    for task in tasks:
-        if task.kanban_stage not in stages_set:
-            errors.append(
-                f"Task '{task.id}' gắn với cột '{task.kanban_stage}' không tồn tại trong cấu hình Kanban {stages}"
-            )
+    errors.extend(validate_dependencies([(task.id, task.dependencies) for task in tasks]))
 
-    # 2.2 Mọi key trong ir.kanban.wip_limits phải nằm trong ir.kanban.stages
-    for stage_name in wip_limits.keys():
-        if stage_name not in stages_set:
-            errors.append(
-                f"Cột '{stage_name}' trong cấu hình giới hạn WIP (wip_limits) không tồn tại trong cấu hình Kanban {stages}."
-            )
+    # =========================================================================
+    # Kết luận & Xử lý raise_on_error
+    # =========================================================================
+    if raise_on_error and errors:
+        raise SchedulingValidationError(errors)
 
-    # 2.3 Mọi giá trị giới hạn trong wip_limits phải thỏa mãn: 1 <= wip_limit <= ir.team_capacity
-    for stage_name, limit_val in wip_limits.items():
-        if not (1 <= limit_val <= ir.team_capacity):
-            errors.append(
-                f"Cột '{stage_name}' có giới hạn WIP={limit_val} không hợp lệ. "
-                f"Giới hạn phải thỏa mãn: 1 <= wip_limit <= dung lượng nhóm ({ir.team_capacity})."
-            )
+    return errors
+
+
+def validate_dependencies(task_dependencies: list[tuple[str, list[str] | None]]) -> list[str]:
+    """Kiểm tra các cạnh đã biết, kể cả khi bản nháp còn thiếu tiên quyết."""
+    errors: list[str] = []
 
     # =========================================================================
     # CHỐT CHẶN 3: Kiểm tra Tham chiếu Phụ thuộc (Referential Integrity)
     # =========================================================================
-    existing_ids = {task.id for task in tasks}
+    existing_ids = {task_id for task_id, _ in task_dependencies}
 
-    for task in tasks:
+    for task_id, dependencies in task_dependencies:
         # 3.1 Không có Task nào tự phụ thuộc vào chính nó
-        if task.id in task.dependencies:
-            errors.append(f"Task '{task.id}' không thể tự phụ thuộc vào chính nó.")
+        if dependencies is not None and task_id in dependencies:
+            errors.append(f"Task '{task_id}' không thể tự phụ thuộc vào chính nó.")
 
         # 3.2 Mọi mã ID trong dependencies phải thực sự tồn tại trong ir.tasks
-        for dep_id in task.dependencies:
+        for dep_id in dependencies or ():
             if dep_id not in existing_ids:
                 errors.append(
-                    f"Task '{task.id}' phụ thuộc vào mã công việc không tồn tại: '{dep_id}'."
+                    f"Task '{task_id}' phụ thuộc vào mã công việc không tồn tại: '{dep_id}'."
                 )
 
     # =========================================================================
@@ -143,12 +148,12 @@ def validate_ir(ir: SchedulingIR, raise_on_error: bool = False) -> list[str]:
     # =========================================================================
     # Xây dựng đồ thị có hướng: node -> dependencies (task phụ thuộc vào dep)
     # Chỉ bổ sung cạnh tới các ID thực sự tồn tại và khác chính task.id
-    adj: dict[str, list[str]] = {t.id: [] for t in tasks}
-    for task in tasks:
-        for dep_id in task.dependencies:
-            if dep_id in existing_ids and dep_id != task.id:
-                if dep_id not in adj[task.id]:
-                    adj[task.id].append(dep_id)
+    adj: dict[str, list[str]] = {task_id: [] for task_id, _ in task_dependencies}
+    for task_id, dependencies in task_dependencies:
+        for dep_id in dependencies or ():
+            if dep_id in existing_ids and dep_id != task_id:
+                if dep_id not in adj[task_id]:
+                    adj[task_id].append(dep_id)
 
     # Màu sắc:
     # 0 = WHITE (Chưa thăm)
@@ -188,11 +193,94 @@ def validate_ir(ir: SchedulingIR, raise_on_error: bool = False) -> list[str]:
         if color[node_id] == 0:
             dfs(node_id, [])
 
-    # =========================================================================
-    # Kết luận & Xử lý raise_on_error
-    # =========================================================================
-    if raise_on_error and errors:
-        raise SchedulingValidationError(errors)
+    return errors
+
+
+def validate_progress(ir: SchedulingIR, calendar: ProjectCalendar, snapshot: ProgressSnapshot) -> list[str]:
+    errors = validate_ir(ir, require_assignments=True)
+    start, as_of = calendar.project_start_date, snapshot.progress_as_of_date
+    if as_of < start:
+        errors.append("Ngày báo cáo tiến độ không được trước ngày bắt đầu dự án.")
+
+    tasks = {task.id: task for task in ir.tasks}
+    for task_id in sorted(snapshot.task_progress.keys() - tasks.keys()):
+        errors.append(f"Thông tin tiến độ tham chiếu công việc không tồn tại: '{task_id}'.")
+
+    empty = TaskProgress()
+    remaining = 0
+    for task in ir.tasks:
+        progress = snapshot.task_progress.get(task.id, empty)
+        finish = progress.actual_finish_date
+        days = progress.remaining_duration
+        if task.status == "Done":
+            if finish is None:
+                errors.append(f"Nhập ngày hoàn thành thực tế cho '{task.id}' (Done).")
+            elif not start <= finish <= as_of:
+                errors.append(f"Ngày hoàn thành thực tế của '{task.id}' phải từ ngày bắt đầu dự án đến hết ngày báo cáo.")
+        elif finish is not None:
+            errors.append(f"Chỉ công việc Done mới được có ngày hoàn thành thực tế: '{task.id}'.")
+
+        if task.status == "Doing":
+            if days is None:
+                errors.append(f"Nhập số ngày còn lại (số nguyên dương) cho '{task.id}' (Doing).")
+            else:
+                remaining += days
+        else:
+            if days is not None:
+                errors.append(f"Chỉ nhập số ngày còn lại cho công việc Doing: '{task.id}'.")
+            if task.status == "To Do":
+                remaining += task.duration
+
+        if task.status in ("Done", "Doing"):
+            for dep_id in task.dependencies:
+                if dep_id not in tasks or dep_id == task.id:
+                    continue  # validate_ir đã báo lỗi tham chiếu.
+                if tasks[dep_id].status != "Done":
+                    errors.append(f"'{task.id}' ({task.status}) cần công việc tiên quyết '{dep_id}' ở trạng thái Done.")
+                    continue
+                dep_finish = snapshot.task_progress.get(dep_id, empty).actual_finish_date
+                # Một công việc phụ thuộc chỉ có thể bắt đầu từ ngày kế tiếp.
+                if task.status == "Done" and finish is not None and dep_finish is not None and finish <= dep_finish:
+                    errors.append(f"Ngày hoàn thành của '{task.id}' phải sau ngày hoàn thành của tiên quyết '{dep_id}'.")
+
+    errors.extend(calendar_range_errors(calendar, end_of_day_boundary(start, as_of) + remaining))
+    return errors
+
+
+def _validate_legacy_kanban(ir: SchedulingIR, tasks: list[Task]) -> list[str]:
+    errors: list[str] = []
+    # Truy xuất an toàn cấu hình Kanban (tương thích kanban_config hoặc kanban)
+    kanban: Optional[KanbanConfig] = getattr(ir, "kanban_config", None)
+    if kanban is None:
+        kanban = getattr(ir, "kanban", None)
+
+    stages: list[str] = getattr(kanban, "stages", []) if kanban else []
+    wip_limits: dict[str, int] = getattr(kanban, "wip_limits", {}) if kanban else {}
+    if not stages:
+        errors.append("Danh sách các cột Kanban (ir.kanban.stages) không được để rỗng.")
+    stages_set = set(stages)
+
+    # 2.1 Mọi task.kanban_stage phải nằm trong ir.kanban.stages
+    for task in tasks:
+        if task.kanban_stage not in stages_set:
+            errors.append(
+                f"Task '{task.id}' gắn với cột '{task.kanban_stage}' không tồn tại trong cấu hình Kanban {stages}"
+            )
+
+    # 2.2 Mọi key trong ir.kanban.wip_limits phải nằm trong ir.kanban.stages
+    for stage_name in wip_limits:
+        if stage_name not in stages_set:
+            errors.append(
+                f"Cột '{stage_name}' trong cấu hình giới hạn WIP (wip_limits) không tồn tại trong cấu hình Kanban {stages}."
+            )
+
+    # 2.3 Mọi giá trị giới hạn trong wip_limits phải thỏa mãn: 1 <= wip_limit <= ir.team_capacity
+    for stage_name, limit_val in wip_limits.items():
+        if not (1 <= limit_val <= ir.team_capacity):
+            errors.append(
+                f"Cột '{stage_name}' có giới hạn WIP={limit_val} không hợp lệ. "
+                f"Giới hạn phải thỏa mãn: 1 <= wip_limit <= dung lượng nhóm ({ir.team_capacity})."
+            )
 
     return errors
 
