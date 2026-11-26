@@ -164,11 +164,14 @@ export function Schedule({ plan, members, deadline }: {
                 const overdue = deadlineBoundary !== null && task.actual_end_day_exclusive > deadlineBoundary;
                 return (
                   <div key={task.id} className="gantt-row">
-                    <div className="gantt-label px-3 py-2 text-xs">
-                      <div><span className="mr-1.5 font-mono text-zinc-400">{task.id}</span>{task.name}</div>
-                      <div className="mt-0.5 text-zinc-400">{memberById.get(task.assignee_id)}</div>
-                      <div className={overdue ? "text-rose-300" : "text-emerald-300"}>
-                        Done · {formatDate(task.actual_finish_date)}{overdue ? " (Trễ hạn)" : ""}
+                    <div className="gantt-label gantt-label-compact px-3 py-2 text-xs"
+                      title={`${task.id} · ${task.name}\n${memberById.get(task.assignee_id) ?? ""} · Hoàn thành thực tế ${formatDate(task.actual_finish_date)}`}>
+                      <div className="flex items-center gap-1.5 font-medium">
+                        <span className="shrink-0 font-mono text-[11px] text-zinc-400">{task.id}</span>
+                        <span className="min-w-0 truncate text-zinc-100">{task.name}</span>
+                      </div>
+                      <div className={`gantt-meta-line ${overdue ? "text-rose-300" : "text-emerald-300"}`}>
+                        <span>{memberById.get(task.assignee_id)} · Done {formatDate(task.actual_finish_date)}</span>
                       </div>
                     </div>
                     <div className="gantt-lane" role="img" tabIndex={0} title={`Hoàn thành thực tế · ${formatDate(task.actual_finish_date)}`}
@@ -191,27 +194,26 @@ export function Schedule({ plan, members, deadline }: {
                 const duration = recovery && plannedTask?.status === "Doing"
                   ? `Còn ${task.duration} ngày · Ước tính ban đầu: ${plannedTask.duration} ngày`
                   : `Dự kiến ${task.duration} ngày`;
+                const compactDuration = recovery && plannedTask?.status === "Doing"
+                  ? `Còn ${task.duration}n`
+                  : `${task.duration}n`;
                 const timing = `${dates} · ${duration}`;
-                const barTip = `${category} · ${member} · ${timing}\n${task.dependencies.length ? `Tiên quyết ${task.dependencies.join(", ")}` : "Không có công việc tiên quyết"}${split.overdueDays > 0 ? `\nVượt hạn chót ${split.overdueDays} ngày` : ""}`;
+                const barTip = `${task.id} · ${task.name}\n${category} · ${member} · ${timing}\n${task.dependencies.length ? `Tiên quyết: ${task.dependencies.join(", ")}` : "Không có công việc tiên quyết"}${split.overdueDays > 0 ? `\nVượt hạn chót ${split.overdueDays} ngày` : ""}`;
                 return (
                   <div key={task.id} className="gantt-row">
-                    <div className="gantt-label px-3 py-2 text-xs">
-                      <div className="flex flex-wrap items-center gap-1.5 font-semibold">
-                        <span className="font-mono font-normal text-zinc-400">{task.id}</span>
-                        <span>{task.name}</span>
-                        {split.overdueDays > 0 && <span className="badge badge-danger">Vượt {split.overdueDays} ngày</span>}
+                    <div className="gantt-label gantt-label-compact px-3 py-2 text-xs" title={barTip}>
+                      <div className="flex items-center gap-1.5">
+                        <span className="shrink-0 font-mono text-[11px] text-zinc-400">{task.id}</span>
+                        <span className="min-w-0 flex-1 truncate font-medium text-zinc-100">{task.name}</span>
+                        {split.overdueDays > 0 && <span className="badge badge-danger shrink-0">Trễ {split.overdueDays}n</span>}
                       </div>
-                      <div className="mt-0.5 flex items-center gap-1.5 break-words text-zinc-400">
+                      <div className="gantt-meta-line text-zinc-400">
                         <span className={`member-dot member-tone-${tone}`} aria-hidden="true" />
-                        <span>{member} · {category}</span>
+                        <span className="truncate">{member} · {compactDuration}</span>
+                        {task.dependencies.length > 0 && (
+                          <span className="gantt-deps-inline">← {task.dependencies.join(", ")}</span>
+                        )}
                       </div>
-                      <div className="text-zinc-400">{dates}</div>
-                      <div className="text-zinc-300">{duration}</div>
-                      {task.dependencies.length > 0 && (
-                        <div className="gantt-deps" title={`Phụ thuộc: ${task.dependencies.join(", ")}`}>
-                          ← {task.dependencies.join(", ")}
-                        </div>
-                      )}
                     </div>
                     <div className="gantt-lane" role="img" tabIndex={0}
                       aria-label={`${task.name} · ${member} · ${timing}${task.queue_wait_days ? ` · Chờ ${task.queue_wait_days} ngày` : ""}${split.overdueDays ? ` · Vượt hạn ${split.overdueDays} ngày` : ""}`}>

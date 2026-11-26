@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Clock3, GripVertical, Link2, Pencil, Plus, Trash2, UserRound, UsersRound, X } from "lucide-react";
 import { HelpButton } from "./ApplicationGuide";
@@ -311,30 +311,146 @@ function InlineDurationInput({ id, value, onCommit }: { id: string; value: numbe
   );
 }
 
+function InlineCategoryInput({ id, value, listId, onCommit }: {
+  id: string; value: string; listId: string; onCommit: (category: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    setEditing(false);
+    if (!trimmed) {
+      setDraft(value);
+      return;
+    }
+    if (trimmed !== value) onCommit(trimmed);
+  }
+
+  if (!editing) {
+    return (
+      <button type="button" className="inline-name-btn text-zinc-300" title="Bấm để sửa nhanh nhóm"
+        aria-label={`Sửa nhanh nhóm ${id}: ${value}`}
+        onClick={() => { setDraft(value); setEditing(true); }}>
+        {value}
+      </button>
+    );
+  }
+
+  return (
+    <input autoFocus list={listId} type="text" className="control inline-table-input"
+      aria-label={`Nhóm công việc ${id}`} value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+        } else if (event.key === "Escape") {
+          setDraft(value);
+          setEditing(false);
+        }
+      }} />
+  );
+}
+
+function InlineDependenciesEditor({ task, tasks, locked, canEdit, onCommit }: {
+  task: Task;
+  tasks: Task[];
+  locked: boolean;
+  canEdit: boolean;
+  onCommit: (dependencies: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const options = tasks.filter((item) => item.id !== task.id);
+  const optionIds = new Set(options.map((item) => item.id));
+  const extraIds = task.dependencies.filter((id) => !optionIds.has(id));
+  const nameById = new Map(options.map((item) => [item.id, item.name]));
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {task.dependencies.length ? (
+          <ul className="flex flex-wrap gap-1" role="list" aria-label={`Công việc tiên quyết của ${task.id}`}>
+            {task.dependencies.map((id) => <li key={id} className="badge font-mono">{id}</li>)}
+          </ul>
+        ) : (
+          <span className="helper"><span aria-hidden="true">—</span><span className="sr-only">Không có công việc tiên quyết</span></span>
+        )}
+        {!locked && canEdit && (
+          <button type="button" className="inline-dep-trigger" aria-expanded={open}
+            aria-label={`Sửa nhanh tiên quyết ${task.id}`} title="Chọn nhanh công việc tiên quyết"
+            onClick={() => setOpen((current) => !current)}>
+            <Plus size={12} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      {open && !locked && (
+        <div className="inline-dep-panel" onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            setOpen(false);
+          }
+        }}>
+          {options.length === 0 && extraIds.length === 0 ? (
+            <p className="text-[11px] text-zinc-400">Chưa có công việc khác.</p>
+          ) : (
+            <div className="max-h-32 space-y-1 overflow-y-auto">
+              {[...options.map((item) => item.id), ...extraIds].map((id) => (
+                <label key={id} className="flex items-start gap-1.5 rounded px-1 py-0.5 text-[11px] hover:bg-zinc-800">
+                  <input type="checkbox" className="mt-0.5" checked={task.dependencies.includes(id)}
+                    onChange={(event) => onCommit(
+                      event.target.checked
+                        ? [...task.dependencies, id]
+                        : task.dependencies.filter((item) => item !== id),
+                    )} />
+                  <span className="min-w-0 break-words">
+                    <span className="font-mono text-zinc-400">{id}</span> {nameById.get(id) ?? "(không tồn tại)"}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="mt-1.5 flex justify-end border-t border-zinc-800 pt-1">
+            <button type="button" className="text-link text-[11px]" onClick={() => setOpen(false)}>Xong</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd, onInlineUpdate }: TaskListProps & {
   onAssign: (index: number, assignee: string | null) => void;
   onAdd: () => void;
   onInlineUpdate?: (index: number, patch: Partial<Task>) => void;
 }) {
+  const categoryListId = useId();
+  const categories = [...new Set(tasks.map(taskCategory).filter(Boolean))];
   return (
     <div className="panel overflow-hidden">
+      <datalist id={categoryListId}>
+        {categories.map((category) => <option key={category} value={category} />)}
+      </datalist>
       <div className="relative overflow-x-auto" role="region" aria-label="Bảng công việc" tabIndex={0}>
-        <table className="data-table w-full min-w-[680px] table-fixed text-left">
+        <table className="data-table w-full min-w-[700px] table-fixed text-left">
           <thead className="table-head border-b border-zinc-800">
             <tr>
               <th scope="col" className="px-3 py-2.5">Công việc</th>
-              <th scope="col" className="w-[13%] px-3 py-2.5">Nhóm</th>
+              <th scope="col" className="w-[14%] px-3 py-2.5">Nhóm</th>
               <th scope="col" className="w-24 px-3 py-2.5" title="Ước tính ban đầu">Số ngày</th>
-              <th scope="col" className="w-[17%] px-3 py-2.5">Tiên quyết</th>
-              <th scope="col" className="w-[24%] px-3 py-2.5">Người phụ trách</th>
+              <th scope="col" className="w-[19%] px-3 py-2.5">Tiên quyết</th>
+              <th scope="col" className="w-[22%] px-3 py-2.5">Người phụ trách</th>
               <th scope="col" className="w-24 px-3 py-2.5">Trạng thái</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800">
             {tasks.map((task, index) => {
               const locked = lockedTasks.has(task.id);
+              const category = taskCategory(task);
               return (
-              <tr key={`${task.id}-${index}`} className="hover:bg-white/[0.025]">
+              <tr key={`${task.id}-${index}`} className="align-top hover:bg-white/[0.025]">
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
                     <span className="max-w-20 shrink-0 truncate font-mono text-[10px] text-zinc-400" title={task.id}>{task.id}</span>
@@ -349,7 +465,14 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
                       aria-label={`Chỉnh sửa ${task.id}: ${task.name}`}>Chỉnh sửa</button>
                   )}
                 </td>
-                <td className="max-w-28 break-words px-3 py-2 text-zinc-400">{taskCategory(task)}</td>
+                <td className="max-w-32 break-words px-3 py-2 text-zinc-400">
+                  {!locked && onInlineUpdate ? (
+                    <InlineCategoryInput id={task.id} value={category} listId={categoryListId}
+                      onCommit={(next) => onInlineUpdate(index, { category: next, kanban_stage: next })} />
+                  ) : (
+                    category
+                  )}
+                </td>
                 <td className="px-3 py-2 tabular-nums">
                   {!locked && onInlineUpdate ? (
                     <InlineDurationInput id={task.id} value={task.duration} onCommit={(duration) => onInlineUpdate(index, { duration })} />
@@ -358,13 +481,8 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
                   )}
                 </td>
                 <td className="px-3 py-2">
-                  {task.dependencies.length ? (
-                    <ul className="flex flex-wrap gap-1" role="list" aria-label={`Công việc tiên quyết của ${task.id}`}>
-                      {task.dependencies.map((id) => <li key={id} className="badge font-mono">{id}</li>)}
-                    </ul>
-                  ) : (
-                    <span className="helper"><span aria-hidden="true">—</span><span className="sr-only">Không có công việc tiên quyết</span></span>
-                  )}
+                  <InlineDependenciesEditor task={task} tasks={tasks} locked={locked} canEdit={Boolean(onInlineUpdate)}
+                    onCommit={(dependencies) => onInlineUpdate?.(index, { dependencies })} />
                 </td>
                 <td className="w-40 px-3 py-2">
                   <AssigneeSelect task={task} members={members} disabled={locked} onChange={(id) => onAssign(index, id)} />
