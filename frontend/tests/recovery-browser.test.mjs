@@ -171,7 +171,7 @@ function prepareRecoveryScenario() {
   return async () => {
     const presetSelect = await waitFor(() => {
       const select = find(".setup-source select");
-      return select?.options.length === 3 && select;
+      return select?.options.length === 5 && select;
     }, "Preset missing");
     change(presetSelect, "Mẫu");
     await pause();

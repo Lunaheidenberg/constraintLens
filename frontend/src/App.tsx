@@ -688,7 +688,7 @@ export default function App() {
   function loadReadyDemo(demo: ReadyDemoPreset) {
     if (!confirmDiscardContent(`Nạp "${demo.ir.project_name}" và thay thế dữ liệu hiện tại?`)) return;
     assistant.cancelRequest();
-    loadProject(demo.ir, "", demo.dateInputs);
+    loadProject(demo.ir, `ready:${demo.id}`, demo.dateInputs);
     setSetupNotice({
       kind: "success",
       message: `Đã nạp "${demo.ir.project_name}" kèm ngày bắt đầu, hạn chót, ${demo.ir.members?.length ?? 0} thành viên và phân công sẵn.`,
@@ -1207,37 +1207,24 @@ export default function App() {
                 </button>
               </div>
               {!quickStartCollapsed && (
-                <>
-                  <ol className="quickstart-steps" aria-label="Tiến trình thiết lập và lập lịch">
-                    {[
-                      { id: "setup" as const, step: "Bước 1", title: "Thiết lập", detail: setupReady ? "Đã đủ công việc, ngày & thành viên" : "Thêm việc, ngày bắt đầu & thành viên" },
-                      { id: "planning" as const, step: "Bước 2", title: "Kế hoạch", detail: accepted ? "Đã chấp nhận lịch tham chiếu" : "Phân công & bấm Tính lịch ban đầu" },
-                      { id: "recovery" as const, step: "Bước 3", title: "Tiến độ", detail: confirmedProgress ? "Đã ghi nhận báo cáo tiến độ" : "Cập nhật Kanban & lập lại lịch" },
-                    ].map((item) => (
-                      <li key={item.id} className={`quickstart-step ${stepDone[item.id] ? "is-done" : ""}`}>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="eyebrow">{item.step}</span>
-                          <span className={`badge ${stepDone[item.id] ? "badge-success" : ""}`}>
-                            {stepDone[item.id] ? "Hoàn tất" : "Chưa xong"}
-                          </span>
-                        </div>
-                        <p className="mt-1 font-semibold">{item.title}</p>
-                        <p className="helper mt-0.5">{item.detail}</p>
-                      </li>
-                    ))}
-                  </ol>
-                  <div className="quickstart-demos">
-                    <span className="helper font-medium text-zinc-300">Chạy thử ngay với mẫu đầy đủ:</span>
-                    <div className="flex flex-wrap gap-2">
-                      {readyDemos.map((demo) => (
-                        <button key={demo.id} type="button" className="button setup-draft-button" title={demo.summary}
-                          onClick={() => loadReadyDemo(demo)}>
-                          <Play size={13} aria-hidden="true" /> {demo.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
+                <ol className="quickstart-steps" aria-label="Tiến trình thiết lập và lập lịch">
+                  {[
+                    { id: "setup" as const, step: "Bước 1", title: "Thiết lập", detail: setupReady ? "Đã đủ công việc, ngày & thành viên" : "Thêm việc, ngày bắt đầu & thành viên" },
+                    { id: "planning" as const, step: "Bước 2", title: "Kế hoạch", detail: accepted ? "Đã chấp nhận lịch tham chiếu" : "Phân công & bấm Tính lịch ban đầu" },
+                    { id: "recovery" as const, step: "Bước 3", title: "Tiến độ", detail: confirmedProgress ? "Đã ghi nhận báo cáo tiến độ" : "Cập nhật Kanban & lập lại lịch" },
+                  ].map((item) => (
+                    <li key={item.id} className={`quickstart-step ${stepDone[item.id] ? "is-done" : ""}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="eyebrow">{item.step}</span>
+                        <span className={`badge ${stepDone[item.id] ? "badge-success" : ""}`}>
+                          {stepDone[item.id] ? "Hoàn tất" : "Chưa xong"}
+                        </span>
+                      </div>
+                      <p className="mt-1 font-semibold">{item.title}</p>
+                      <p className="helper mt-0.5">{item.detail}</p>
+                    </li>
+                  ))}
+                </ol>
               )}
             </section>
             {setupNotice && (
@@ -1266,18 +1253,37 @@ export default function App() {
                     <Plus size={15} aria-hidden="true" /> Thêm thủ công
                   </button>
                 </div>
-                <label className="field">Kịch bản mẫu
+                <label className="field">Kịch bản & mẫu chạy thử
                   <select className="control w-full" value={selectedPreset} onChange={(event) => {
                     const key = event.target.value;
-                    if (confirmReplace()) {
+                    if (key.startsWith("ready:")) {
+                      const demo = readyDemos.find((item) => `ready:${item.id}` === key);
+                      if (demo) loadReadyDemo(demo);
+                      return;
+                    }
+                    if (presets[key] && confirmReplace()) {
                       assistant.cancelRequest();
                       loadProject(presets[key], key);
                     }
                   }}>
-                    <option value="" disabled>Chọn kịch bản mẫu</option>
-                    {Object.keys(presets).map((name) => <option key={name}>{name}</option>)}
+                    <option value="" disabled>Chọn mẫu chạy thử hoặc kịch bản mẫu</option>
+                    <optgroup label="Mẫu chạy thử ngay (đủ ngày & phân công)">
+                      {readyDemos.map((demo) => (
+                        <option key={demo.id} value={`ready:${demo.id}`}>{demo.label}</option>
+                      ))}
+                    </optgroup>
+                    {Object.keys(presets).length > 0 && (
+                      <optgroup label="Kịch bản mẫu ban đầu (từ máy chủ)">
+                        {Object.keys(presets).map((name) => <option key={name} value={name}>{name}</option>)}
+                      </optgroup>
+                    )}
                   </select>
                 </label>
+                <p className="helper -mt-2">
+                  {selectedPreset.startsWith("ready:")
+                    ? readyDemos.find((item) => `ready:${item.id}` === selectedPreset)?.summary
+                    : "Gồm 2 mẫu chạy ngay (có sẵn ngày, thành viên & phân công) và 4 kịch bản mẫu ban đầu (luồng chuẩn, nghẽn cổ chai, vòng lặp DAG, microservices)."}
+                </p>
                 {presetError && (
                   <div role="alert" className="notice error">
                     <p>{presetError}</p>

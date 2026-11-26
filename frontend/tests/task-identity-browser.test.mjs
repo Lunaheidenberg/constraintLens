@@ -123,7 +123,7 @@ function prepareTaskIdentityScenario() {
   };
 
   return async () => {
-    await waitFor(() => find(".setup-source select")?.options.length === 4, "Presets did not load");
+    await waitFor(() => find(".setup-source select")?.options.length === 6, "Presets did not load");
     await load("Bookstore");
     await change(find(".setup-calendar-fields input"), "01/11/2026");
     await change(find(".setup-calendar-fields .date-field:nth-child(2) input"), "30/11/2026");

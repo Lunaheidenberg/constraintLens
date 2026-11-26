@@ -131,15 +131,6 @@
     background: var(--inset);
   }
   .quickstart-step.is-done { border-color: var(--success-border); background: color-mix(in srgb, var(--success-soft) 55%, var(--inset)); }
-  .quickstart-demos {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem 0.75rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--line);
-  }
   .workspace { max-width: var(--page-width); margin-inline: auto; padding: 1.5rem var(--page-gutter) 3rem; }
   .workspace-view > * + * { margin-top: 1.5rem; }
   .page-heading, .section-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.625rem 1rem; }
