@@ -450,6 +450,28 @@
     color: var(--text);
   }
   .ai-settings-dialog::backdrop { background: rgb(5 7 12 / 0.72); }
+  .ai-mode-grid { display: grid; gap: 0.5rem; }
+  @media (min-width: 520px) {
+    .ai-mode-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  .ai-mode-card {
+    display: grid;
+    align-content: start;
+    gap: 0.25rem;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--control-radius);
+    background: var(--inset);
+    text-align: left;
+  }
+  .ai-mode-card:hover { border-color: var(--line-strong); background: var(--raised); }
+  .ai-mode-card.is-active { border-color: var(--accent-border); background: var(--accent-soft); }
+  .ai-key-guide {
+    padding: 0.5rem 0.625rem;
+    border: 1px solid var(--line);
+    border-radius: var(--control-radius);
+    background: var(--inset);
+  }
   .draft-member-chip {
     display: inline-flex;
     align-items: center;

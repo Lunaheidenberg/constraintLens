@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ChangeEvent } from "react";
 import {
   ArrowDown, ArrowRight, CalendarDays, ChartGantt, Check, ChevronDown, ChevronUp, CircleHelp,
-  Download, FilePlus2, Info, KeyRound, Layers3, LayoutGrid, ListTodo, LoaderCircle, Pencil, Play, Plus,
-  RefreshCw, Settings2, Sparkles, Upload, UsersRound, X,
+  Download, ExternalLink, FilePlus2, Info, KeyRound, Layers3, LayoutGrid, ListTodo, LoaderCircle, Pencil, Play, Plus,
+  RefreshCw, Settings2, ShieldCheck, Sparkles, Upload, UsersRound, X,
 } from "lucide-react";
 import { ApplicationGuide, HelpButton, type HelpApi } from "./ApplicationGuide";
+import { BYOK_MODEL_PRESETS, DEFAULT_BYOK_MODEL, normalizeModelId, verifyByokKey, type ByokConfig } from "./byokGemini";
 import { formatDate, isCalendarDate, parseDateInput } from "./calendar";
 import { DateField } from "./DateField";
 import { DeadlineWarning } from "./DeadlineWarning";
@@ -65,22 +66,10 @@ function calendarErrors(calendar: ProjectCalendar, deadlineInput: string) {
   return [];
 }
 
-function isAiPath(path: string) {
-  return path.startsWith("/api/planning/") || path.startsWith("/api/parse/") ||
-    path.startsWith("/api/help/") || path.startsWith("/api/recovery/") || path.startsWith("/api/ai/");
-}
-
-async function request<T>(path: string, options?: RequestInit, sessionApiKey?: string): Promise<T> {
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response;
-  const trimmedKey = sessionApiKey?.trim();
-  let requestOptions = options;
-  if (trimmedKey && isAiPath(path)) {
-    const headers = new Headers(options?.headers);
-    headers.set("X-Gemini-Api-Key", trimmedKey);
-    requestOptions = { ...options, headers };
-  }
   try {
-    response = await fetch(API_BASE + path, requestOptions);
+    response = await fetch(API_BASE + path, options);
   } catch (error) {
     if (options?.signal?.aborted) throw error;
     throw new Error("Không kết nối được API. Kiểm tra máy chủ tại cổng 8000 rồi thử lại.");
@@ -101,14 +90,19 @@ async function request<T>(path: string, options?: RequestInit, sessionApiKey?: s
   }
 }
 
-function post<T>(path: string, body: unknown, signal?: AbortSignal, sessionApiKey?: string) {
+function post<T>(path: string, body: unknown, signal?: AbortSignal) {
   return request<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
-  }, sessionApiKey);
+  });
 }
+
+const helpApi: HelpApi = {
+  topics: (workspace, signal) => request(`/api/help/topics?workspace=${workspace}`, { signal }),
+  ask: (workspace, question, signal) => post("/api/help/ask", { workspace, question }, signal),
+};
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -184,87 +178,236 @@ function appPlanReducer(state: PlanState, action: AppPlanAction): PlanState {
 function AiSettingsDialog({
   aiStatus,
   loading,
-  sessionApiKey,
-  onSaveSessionKey,
+  byok,
+  onSaveByok,
   onRefreshStatus,
   onClose,
 }: {
   aiStatus: AiStatus | null;
   loading: boolean;
-  sessionApiKey: string;
-  onSaveSessionKey: (key: string) => void;
+  byok: ByokConfig;
+  onSaveByok: (next: ByokConfig) => void;
   onRefreshStatus: () => void;
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [draftKey, setDraftKey] = useState(sessionApiKey);
-  const configured = Boolean(aiStatus?.configured || sessionApiKey.trim());
+  const checkAbort = useRef<AbortController | null>(null);
+  const presetIds = useMemo(() => new Set<string>(BYOK_MODEL_PRESETS.map((item) => item.id)), []);
+  const initialModel = normalizeModelId(byok.model);
+  const [draftEnabled, setDraftEnabled] = useState(byok.enabled);
+  const [draftKey, setDraftKey] = useState(byok.apiKey);
+  const [selectedModel, setSelectedModel] = useState(presetIds.has(initialModel) ? initialModel : "__custom__");
+  const [customModel, setCustomModel] = useState(presetIds.has(initialModel) ? "" : initialModel);
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
+  const [checkState, setCheckState] = useState<{ status: "idle" | "checking" | "ok" | "error"; message?: string }>({ status: "idle" });
+
+  const resolvedModel = selectedModel === "__custom__"
+    ? normalizeModelId(customModel || DEFAULT_BYOK_MODEL)
+    : selectedModel;
+  const usingByok = byok.enabled && Boolean(byok.apiKey.trim());
+  const extraModels = discoveredModels.filter((id) => !presetIds.has(id));
 
   useLayoutEffect(() => {
     const modal = dialog.current;
     if (modal && !modal.open) modal.showModal();
   }, []);
 
+  useEffect(() => () => checkAbort.current?.abort(), []);
+
+  async function verifyDirectKey() {
+    if (!draftKey.trim() || checkState.status === "checking") return;
+    checkAbort.current?.abort();
+    const controller = new AbortController();
+    checkAbort.current = controller;
+    setCheckState({ status: "checking" });
+    try {
+      const result = await verifyByokKey(draftKey, resolvedModel, controller.signal);
+      if (controller.signal.aborted) return;
+      if (result.availableModels?.length) {
+        setDiscoveredModels(result.availableModels);
+      }
+      if (result.ok) {
+        setCheckState({
+          status: "ok",
+          message: `Khóa hợp lệ khi gọi trực tiếp Google Gemini (${resolvedModel}).`,
+        });
+      } else {
+        setCheckState({ status: "error", message: result.error ?? "Không kiểm tra được khóa Gemini." });
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        setCheckState({ status: "error", message: "Không kiểm tra được khóa trực tiếp tới Google." });
+      }
+    }
+  }
+
   return (
     <dialog ref={dialog} aria-labelledby="ai-settings-heading" className="panel ai-settings-dialog" onClose={onClose}>
       <header className="dialog-header flex items-center justify-between gap-2 px-4 py-3">
         <h2 id="ai-settings-heading" className="section-title">
-          <KeyRound size={16} aria-hidden="true" className="text-[var(--accent)]" /> Cài đặt Gemini AI
+          <KeyRound size={16} aria-hidden="true" className="text-[var(--accent)]" /> Cài đặt Gemini AI &amp; BYOK
         </h2>
         <button type="button" className="button icon-button" aria-label="Đóng cài đặt Gemini"
           onClick={() => dialog.current?.close()}>
           <X size={16} aria-hidden="true" />
         </button>
       </header>
-      <div className="space-y-3 p-4">
-        <div className={`notice ${configured ? "success" : "warning"} flex flex-wrap items-center justify-between gap-2`}>
+      <form className="space-y-3 p-4" onSubmit={(event) => {
+        event.preventDefault();
+        if (draftEnabled && !draftKey.trim()) return;
+        onSaveByok({
+          enabled: draftEnabled,
+          apiKey: draftKey.trim(),
+          model: resolvedModel,
+        });
+        dialog.current?.close();
+      }}>
+        <div className={`notice ${usingByok || aiStatus?.configured ? "success" : "warning"} flex flex-wrap items-center justify-between gap-2`}>
           <div>
             <p className="font-semibold">
-              {loading && !aiStatus ? "Đang kiểm tra trạng thái Gemini…"
-                : configured ? "Gemini: Sẵn sàng" : "Gemini: Chưa cấu hình key"}
+              {usingByok
+                ? "Đang dùng khóa cá nhân (BYOK · Gọi trực tiếp Google)"
+                : loading && !aiStatus
+                  ? "Đang kiểm tra AI máy chủ…"
+                  : aiStatus?.configured
+                    ? "Đang dùng AI mặc định của máy chủ"
+                    : "Máy chủ chưa bật AI mặc định"}
             </p>
             <p className="helper mt-0.5">
-              Model dự kiến: <code className="font-mono text-zinc-200">{aiStatus?.model ?? "gemini-3.6-flash"}</code>
+              Model đang áp dụng:{" "}
+              <code className="font-mono text-zinc-200">{usingByok ? byok.model : (aiStatus?.model ?? "gemini-3.6-flash")}</code>
             </p>
           </div>
           <button type="button" className="button" disabled={loading} onClick={onRefreshStatus}>
-            <RefreshCw size={13} className={loading ? "busy-icon" : undefined} aria-hidden="true" /> Kiểm tra lại
+            <RefreshCw size={13} className={loading ? "busy-icon" : undefined} aria-hidden="true" /> Kiểm tra máy chủ
           </button>
         </div>
 
-        <div className="notice space-y-1.5">
-          <p className="font-medium text-zinc-200">Cách cấu hình lâu dài trên máy chủ (.env)</p>
-          <p className="helper">Tạo hoặc mở tệp <code className="font-mono">.env</code> ở thư mục gốc dự án và thêm:</p>
-          <pre className="overflow-x-auto rounded border border-zinc-800 bg-zinc-950/70 p-2 font-mono text-xs text-zinc-200">
-{`GEMINI_API_KEY = your_api_key_here
-GEMINI_DRAFT_MODEL = gemini-3.6-flash`}
-          </pre>
-        </div>
-
-        <form className="section-rule space-y-2.5" onSubmit={(event) => {
-          event.preventDefault();
-          onSaveSessionKey(draftKey.trim());
-        }}>
-          <label className="field">Khóa Gemini tạm theo phiên (chỉ giữ trong RAM tab này)
-            <input type="password" autoComplete="off" className="control w-full font-mono"
-              placeholder="Nhập GEMINI_API_KEY tạm nếu chưa cấu hình .env"
-              value={draftKey} onChange={(event) => setDraftKey(event.target.value)} />
-          </label>
-          <p className="helper">
-            Khóa tạm chỉ nằm trong bộ nhớ tab trình duyệt hiện tại để gửi qua header bảo mật khi gọi API, không lưu xuống localStorage, JSON hay log.
-          </p>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {sessionApiKey && (
-              <button type="button" className="button mr-auto text-rose-300" onClick={() => {
-                setDraftKey("");
-                onSaveSessionKey("");
-              }}>Xóa khóa phiên</button>
-            )}
-            <button type="button" className="button" onClick={() => dialog.current?.close()}>Đóng</button>
-            <button type="submit" className="button primary" disabled={!draftKey.trim()}>Dùng cho phiên này</button>
+        <fieldset className="space-y-2">
+          <legend className="field">Chế độ gọi Gemini</legend>
+          <div className="ai-mode-grid">
+            <button type="button" className={`ai-mode-card ${!draftEnabled ? "is-active" : ""}`}
+              aria-pressed={!draftEnabled} onClick={() => setDraftEnabled(false)}>
+              <span className="font-semibold text-zinc-100">AI mặc định của máy chủ</span>
+              <span className="helper">Dùng hạn mức của hệ thống (không cần nhập khóa).</span>
+            </button>
+            <button type="button" className={`ai-mode-card ${draftEnabled ? "is-active" : ""}`}
+              aria-pressed={draftEnabled} onClick={() => setDraftEnabled(true)}>
+              <span className="flex items-center gap-1.5 font-semibold text-zinc-100">
+                <ShieldCheck size={14} aria-hidden="true" className="text-[var(--success)]" /> Khóa cá nhân (BYOK)
+              </span>
+              <span className="helper">Trình duyệt gọi thẳng Google API, máy chủ không thấy khóa.</span>
+            </button>
           </div>
-        </form>
-      </div>
+        </fieldset>
+
+        {draftEnabled ? (
+          <div className="section-rule space-y-3">
+            <label className="field">Phiên bản model Gemini
+              <select className="control w-full" value={selectedModel} onChange={(event) => {
+                setSelectedModel(event.target.value);
+                setCheckState({ status: "idle" });
+              }}>
+                <optgroup label="Phiên bản phổ biến">
+                  {BYOK_MODEL_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>{preset.label}</option>
+                  ))}
+                </optgroup>
+                {extraModels.length > 0 && (
+                  <optgroup label="Phát hiện từ khóa của bạn">
+                    {extraModels.map((id) => (
+                      <option key={id} value={id}>{id}</option>
+                    ))}
+                  </optgroup>
+                )}
+                <option value="__custom__">Nhập mã model khác (tùy chỉnh)…</option>
+              </select>
+            </label>
+
+            {selectedModel === "__custom__" && (
+              <label className="field">Mã model Gemini tùy chỉnh
+                <input type="text" className="control w-full font-mono" placeholder="Ví dụ: gemini-2.5-flash-preview-05-20"
+                  value={customModel} onChange={(event) => {
+                    setCustomModel(event.target.value);
+                    setCheckState({ status: "idle" });
+                  }} />
+              </label>
+            )}
+
+            <label className="field">Khóa Gemini API cá nhân (chỉ giữ trong RAM tab này)
+              <input type="password" autoComplete="off" className="control w-full font-mono"
+                placeholder="Dán khóa API bắt đầu bằng AIza..."
+                value={draftKey} onChange={(event) => {
+                  setDraftKey(event.target.value);
+                  if (checkState.status !== "idle") setCheckState({ status: "idle" });
+                }} />
+            </label>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button type="button" className="button" disabled={!draftKey.trim() || checkState.status === "checking"}
+                onClick={() => void verifyDirectKey()}>
+                {checkState.status === "checking" && <LoaderCircle size={13} className="busy-icon" aria-hidden="true" />}
+                Kiểm tra khóa trực tiếp
+              </button>
+              <span className="helper">Chỉ gọi thẳng tới Google AI, 0 token.</span>
+            </div>
+
+            {checkState.status !== "idle" && checkState.message && (
+              <p role="status" className={`notice ${checkState.status === "ok" ? "success" : "error"}`}>
+                {checkState.message}
+              </p>
+            )}
+
+            <p className="helper">
+              Chế độ BYOK áp dụng cho luồng <strong>AI giúp lập kế hoạch</strong> (gửi trực tiếp tới{" "}
+              <code className="font-mono text-zinc-200">generativelanguage.googleapis.com</code> qua header{" "}
+              <code className="font-mono text-zinc-200">x-goog-api-key</code>, không đi qua máy chủ ConstraintLens và không lưu xuống{" "}
+              <code className="font-mono text-zinc-200">localStorage</code>).
+            </p>
+
+            <details className="ai-key-guide">
+              <summary className="text-link cursor-pointer font-medium">
+                Hướng dẫn lấy Gemini API Key miễn phí (Google AI Studio)
+              </summary>
+              <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-zinc-300">
+                <li>
+                  Truy cập{" "}
+                  <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer"
+                    className="text-link inline-flex items-center gap-1 underline">
+                    Google AI Studio (API Keys) <ExternalLink size={11} aria-hidden="true" />
+                  </a>{" "}
+                  và đăng nhập bằng tài khoản Google của bạn.
+                </li>
+                <li>
+                  Bấm <strong>Create API key</strong>, chọn một Google Cloud Project có sẵn (hoặc tạo nhanh project mới) rồi sao chép chuỗi khóa dạng <code className="font-mono text-zinc-100">AIza...</code>.
+                </li>
+                <li>
+                  Dán vào ô trên và bấm <strong>Kiểm tra khóa trực tiếp</strong>. Khi đóng tab hoặc tải lại trang, khóa sẽ tự xóa sạch khỏi bộ nhớ; bạn có thể kiểm chứng bằng <code className="font-mono text-zinc-100">F12 → Network</code>.
+                </li>
+              </ol>
+            </details>
+          </div>
+        ) : (
+          <p className="helper">
+            Ở chế độ mặc định, yêu cầu AI sử dụng cấu hình của máy chủ ConstraintLens. Nếu máy chủ hết hạn mức hoặc bạn muốn dùng model riêng (như Gemini 2.5 Pro / Flash-Lite), hãy chuyển sang <strong>Khóa cá nhân (BYOK)</strong>.
+          </p>
+        )}
+
+        <div className="section-rule flex flex-wrap items-center justify-end gap-2">
+          {byok.apiKey && (
+            <button type="button" className="button mr-auto text-rose-300" onClick={() => {
+              setDraftKey("");
+              setDraftEnabled(false);
+              setCheckState({ status: "idle" });
+              onSaveByok({ enabled: false, apiKey: "", model: DEFAULT_BYOK_MODEL });
+            }}>Xóa khóa BYOK</button>
+          )}
+          <button type="button" className="button" onClick={() => dialog.current?.close()}>Đóng</button>
+          <button type="submit" className="button primary" disabled={draftEnabled && !draftKey.trim()}>
+            {draftEnabled ? "Áp dụng BYOK" : "Dùng AI máy chủ"}
+          </button>
+        </div>
+      </form>
     </dialog>
   );
 }
@@ -299,19 +442,12 @@ export default function App() {
   const [quickStartCollapsed, setQuickStartCollapsed] = useState(() => loadQuickStartCollapsed());
   const [renamingProject, setRenamingProject] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState("");
-  const [sessionApiKey, setSessionApiKey] = useState("");
+  const [byok, setByok] = useState<ByokConfig>({ enabled: false, apiKey: "", model: DEFAULT_BYOK_MODEL });
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [aiStatusLoading, setAiStatusLoading] = useState(true);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
-  const latestSessionKey = useRef(sessionApiKey);
-  useLayoutEffect(() => { latestSessionKey.current = sessionApiKey; }, [sessionApiKey]);
-  const apiPost = useCallback(<T,>(path: string, body: unknown, signal?: AbortSignal) => (
-    post<T>(path, body, signal, latestSessionKey.current)
-  ), []);
-  const appHelpApi = useMemo<HelpApi>(() => ({
-    topics: (ws, signal) => request(`/api/help/topics?workspace=${ws}`, { signal }, latestSessionKey.current),
-    ask: (ws, question, signal) => post("/api/help/ask", { workspace: ws, question }, signal, latestSessionKey.current),
-  }), []);
+  const latestByok = useRef(byok);
+  useLayoutEffect(() => { latestByok.current = byok; }, [byok]);
   const importInputRef = useRef<HTMLInputElement>(null);
   const readyDemos = readyDemoPresets();
   const activeRequest = useRef<AbortController | null>(null);
@@ -322,7 +458,7 @@ export default function App() {
   const applyBlocked = planningApplyBlock(ir.tasks.length, plans, !!asOfInput || entries.size > 0, !!phase || editing !== null);
   const latestApplyBlock = useRef(applyBlocked);
   useLayoutEffect(() => { latestApplyBlock.current = applyBlocked; }, [applyBlocked]);
-  const assistant = usePlanningAssistant(apiPost, () => ({
+  const assistant = usePlanningAssistant(post, () => ({
     version: editVersion.current,
     blocked: latestApplyBlock.current || (activeRequest.current
       ? "Hãy hoàn tất thao tác dự án đang chạy trước khi áp dụng bản nháp." : ""),
@@ -340,7 +476,7 @@ export default function App() {
       errors: [],
     });
     goTo("planning");
-  });
+  }, () => latestByok.current);
   const previousAssistantStep = useRef(assistant.step);
 
   function goTo(view: Workspace, target = `${view}-heading`) {
@@ -412,9 +548,9 @@ export default function App() {
     return () => controller.abort();
   }, [presetRequest]);
 
-  const refreshAiStatus = useCallback((overrideKey?: string) => {
+  const refreshAiStatus = useCallback(() => {
     setAiStatusLoading(true);
-    request<AiStatus>("/api/ai/status", undefined, overrideKey ?? latestSessionKey.current)
+    request<AiStatus>("/api/ai/status")
       .then((data) => setAiStatus(data))
       .catch(() => setAiStatus(null))
       .finally(() => setAiStatusLoading(false));
@@ -423,7 +559,7 @@ export default function App() {
   useEffect(() => {
     const controller = new AbortController();
     setAiStatusLoading(true);
-    request<AiStatus>("/api/ai/status", { signal: controller.signal }, latestSessionKey.current)
+    request<AiStatus>("/api/ai/status", { signal: controller.signal })
       .then((data) => { if (!controller.signal.aborted) setAiStatus(data); })
       .catch(() => { if (!controller.signal.aborted) setAiStatus(null); })
       .finally(() => { if (!controller.signal.aborted) setAiStatusLoading(false); });
@@ -879,7 +1015,7 @@ export default function App() {
     const context = recoveryContext(plans, instance);
     const explain = context ? (
       workspace === (fromProgress ? "recovery" : "planning") &&
-      <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} sessionApiKey={sessionApiKey} />
+      <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} />
     ) : <p className="helper">Cần có dữ liệu lịch đầy đủ để giải thích đề xuất. Hãy tính lại lịch.</p>;
     return (
       <section id="schedule-proposal" tabIndex={-1} className="panel proposal grid-cols-[minmax(0,1fr)] result-enter" aria-labelledby="proposal-heading">
@@ -934,10 +1070,13 @@ export default function App() {
     </div>
   );
   const setupReady = ir.tasks.length > 0 && members.length > 0 && !!calendar.project_start_date && !dateErrors.length;
-  const geminiConfigured = Boolean(aiStatus?.configured || sessionApiKey.trim());
-  const aiStatusText = aiStatusLoading && !aiStatus
-    ? "Gemini: Đang kiểm tra…"
-    : geminiConfigured ? "Gemini: Sẵn sàng" : "Gemini: Chưa cấu hình key";
+  const byokActive = byok.enabled && Boolean(byok.apiKey.trim());
+  const geminiConfigured = byokActive || Boolean(aiStatus?.configured);
+  const aiStatusText = byokActive
+    ? "Gemini: BYOK (trực tiếp)"
+    : aiStatusLoading && !aiStatus
+      ? "Gemini: Đang kiểm tra…"
+      : geminiConfigured ? "Gemini: Sẵn sàng" : "Gemini: Chưa cấu hình key";
   const stepDone: Record<Workspace, boolean> = {
     setup: setupReady,
     planning: accepted !== null,
@@ -1018,7 +1157,7 @@ export default function App() {
                   aria-label="Chọn tệp dự án JSON" onChange={(event) => void importProjectFile(event)} />
               </div>
               <button type="button" className="button ai-status-btn" aria-haspopup="dialog"
-                title={aiStatus?.model ? `Model: ${aiStatus.model} · Bấm để xem hoặc nhập khóa tạm` : "Xem trạng thái Gemini API"}
+                title={byokActive ? `BYOK trực tiếp · Model: ${byok.model}` : aiStatus?.model ? `Model máy chủ: ${aiStatus.model} · Bấm để cấu hình BYOK` : "Cài đặt Gemini AI & BYOK"}
                 onClick={() => setAiSettingsOpen(true)}>
                 <span className={`ai-status-dot ${geminiConfigured ? "is-ready" : "is-missing"}`} aria-hidden="true" />
                 {aiStatusText}
@@ -1283,7 +1422,7 @@ export default function App() {
                       <h4 id="accepted-heading" className="text-sm font-semibold">Lịch đang áp dụng</h4>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={`badge ${outdated || acceptedAssessment?.daysLate ? "badge-warning" : "badge-success"}`}>{outdated ? "Cần cập nhật" : "Đã chấp nhận"}</span>
-                        {acceptedContext && <RecoveryAssistant key={acceptedContext.key} context={acceptedContext} baseUrl={API_BASE} sessionApiKey={sessionApiKey} />}
+                        {acceptedContext && <RecoveryAssistant key={acceptedContext.key} context={acceptedContext} baseUrl={API_BASE} />}
                       </div>
                     </div>
                     {!!acceptedAssessment?.daysLate && <DeadlineWarning assessment={acceptedAssessment} accepted onRevise={revisePlan} />}
@@ -1336,7 +1475,7 @@ export default function App() {
                 <div className="flex flex-wrap items-center gap-3">
                   {workspace === "recovery" && accepted && proposal?.source !== "progress" && !comparisonPair({ ...plans, proposal: null }) && (() => {
                     const singleAcceptedContext = acceptedRecoveryContext(plans, instance);
-                    return singleAcceptedContext && <RecoveryAssistant key={singleAcceptedContext.key} context={singleAcceptedContext} baseUrl={API_BASE} sessionApiKey={sessionApiKey} />;
+                    return singleAcceptedContext && <RecoveryAssistant key={singleAcceptedContext.key} context={singleAcceptedContext} baseUrl={API_BASE} />;
                   })()}
                   {accepted && <button className="text-link" onClick={() => goTo("planning", "schedule-heading")}>Xem lịch đang áp dụng</button>}
                 </div>
@@ -1347,7 +1486,7 @@ export default function App() {
                   historyExplanation={(reference) => {
                     if (workspace !== "recovery") return null;
                     const context = acceptedRecoveryContext(plans, instance, reference);
-                    return context && <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} sessionApiKey={sessionApiKey} />;
+                    return context && <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} />;
                   }} />
               )}
             </section>
@@ -1364,11 +1503,8 @@ export default function App() {
         <AiSettingsDialog
           aiStatus={aiStatus}
           loading={aiStatusLoading}
-          sessionApiKey={sessionApiKey}
-          onSaveSessionKey={(nextKey) => {
-            setSessionApiKey(nextKey);
-            refreshAiStatus(nextKey);
-          }}
+          byok={byok}
+          onSaveByok={(next) => setByok(next)}
           onRefreshStatus={() => refreshAiStatus()}
           onClose={() => setAiSettingsOpen(false)}
         />
@@ -1376,5 +1512,5 @@ export default function App() {
     </div>
   );
   // Help fields are siblings of the project edit-capture boundary, even when launched from a task dialog.
-  return <ApplicationGuide workspace={workspace} api={appHelpApi}>{projectView}</ApplicationGuide>;
+  return <ApplicationGuide workspace={workspace} api={helpApi}>{projectView}</ApplicationGuide>;
 }

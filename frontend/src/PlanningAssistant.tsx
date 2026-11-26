@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, Sparkles } from "lucide-react";
+import { byokClarify, byokGenerateDraft, type ByokConfig } from "./byokGemini";
 import { generateProjectDraft, type DraftRequestUpdates } from "./draft";
 import { cancelPlanningRequest, confirmPlanningDraft, planningApi, type ClarificationSession, type PlanningApplyTarget } from "./planning";
 import type { PlanningClarification, PlanningDraftResult, QuestionID, SchedulingIR } from "./types";
@@ -17,6 +18,7 @@ export function usePlanningAssistant(
   post: Parameters<typeof planningApi>[0],
   getTarget: () => PlanningApplyTarget,
   onApply: (confirmed: SchedulingIR) => void,
+  getByok?: () => ByokConfig,
 ) {
   const api = planningApi(post);
   const request = useRef<AbortController | null>(null);
@@ -66,18 +68,34 @@ export function usePlanningAssistant(
       setStep("clarify");
       return;
     }
-    return generateProjectDraft(request, (signal) => api.clarify(description, signal), requestUpdates<PlanningClarification>("clarifying", (result) => {
-      setSession({ ...result, prompt: description, answers: {} });
-      setStep("clarify");
-    }));
+    const byok = getByok?.();
+    const useByok = Boolean(byok?.enabled && byok.apiKey.trim());
+    return generateProjectDraft(
+      request,
+      (signal) => useByok
+        ? byokClarify(description, byok!.apiKey, byok!.model, signal)
+        : api.clarify(description, signal),
+      requestUpdates<PlanningClarification>("clarifying", (result) => {
+        setSession({ ...result, prompt: description, answers: {} });
+        setStep("clarify");
+      }),
+    );
   }
 
   function generate(skipAll: boolean) {
     if (!session || session.prompt !== prompt.trim()) return;
-    return generateProjectDraft(request, (signal) => api.draft(session, skipAll, signal), requestUpdates<PlanningDraftResult>("generating", (result) => {
-      setDraft(result);
-      setStep("review");
-    }));
+    const byok = getByok?.();
+    const useByok = Boolean(byok?.enabled && byok.apiKey.trim());
+    return generateProjectDraft(
+      request,
+      (signal) => useByok
+        ? byokGenerateDraft(session, skipAll, byok!.apiKey, byok!.model, signal)
+        : api.draft(session, skipAll, signal),
+      requestUpdates<PlanningDraftResult>("generating", (result) => {
+        setDraft(result);
+        setStep("review");
+      }),
+    );
   }
 
   function confirm() {
