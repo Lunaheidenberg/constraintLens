@@ -170,28 +170,21 @@ export function ProgressEditor(props: ProgressEditorProps) {
                               ? earliestAfterDep
                               : calendar.project_start_date;
                             const canQuickFillReportDate = canUseReportDate && value.trim() !== reportDateDisplay && (!minFinishDate || asOf >= minFinishDate);
-                            const showDepHint = Boolean(latestDepFinish && earliestAfterDep && (!asOf || asOf <= latestDepFinish));
                             return (
-                              <div className="progress-done-row">
-                                <div className="progress-done-field">
-                                  <DateField label={`Ngày hoàn thành thực tế của ${task.id}`}
-                                    min={minFinishDate || undefined} max={asOf || undefined} value={value}
-                                    onChange={(value) => props.onEntryChange(task.id, value)} />
-                                </div>
-                                {(canQuickFillReportDate || showDepHint) && (
-                                  <div className="progress-done-hint">
-                                    {canQuickFillReportDate && (
-                                      <button type="button" className="button progress-quick-chip"
-                                        onClick={() => props.onEntryChange(task.id, reportDateDisplay)}>
-                                        Dùng ngày báo cáo ({reportDateDisplay})
-                                      </button>
-                                    )}
-                                    {showDepHint && (
-                                      <p className="progress-dep-hint">
-                                        Phải sau ngày hoàn thành của {latestDepId} ({formatDate(latestDepFinish)}), từ {formatDate(earliestAfterDep)} trở đi.
-                                      </p>
-                                    )}
-                                  </div>
+                              <div className="max-w-56 space-y-1">
+                                <DateField label={`Ngày hoàn thành thực tế của ${task.id}`}
+                                  min={minFinishDate || undefined} max={asOf || undefined} value={value}
+                                  onChange={(value) => props.onEntryChange(task.id, value)} />
+                                {canQuickFillReportDate && (
+                                  <button type="button" className="text-link progress-quick-btn"
+                                    onClick={() => props.onEntryChange(task.id, reportDateDisplay)}>
+                                    Dùng ngày báo cáo ({reportDateDisplay})
+                                  </button>
+                                )}
+                                {latestDepFinish && earliestAfterDep && (!asOf || asOf <= latestDepFinish) && (
+                                  <p className="text-[11px] text-amber-300">
+                                    Phải sau ngày hoàn thành của {latestDepId} ({formatDate(latestDepFinish)}), tức từ {formatDate(earliestAfterDep)} trở đi.
+                                  </p>
                                 )}
                               </div>
                             );
