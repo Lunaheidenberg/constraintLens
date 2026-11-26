@@ -246,9 +246,75 @@ export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskList
   );
 }
 
-export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd }: TaskListProps & {
+function InlineNameInput({ id, value, onCommit }: { id: string; value: string; onCommit: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    setEditing(false);
+    if (!trimmed) {
+      setDraft(value);
+      return;
+    }
+    if (trimmed !== value) onCommit(trimmed);
+  }
+
+  if (!editing) {
+    return (
+      <button type="button" className="inline-name-btn" title="Bấm để sửa nhanh tên công việc"
+        aria-label={`Sửa nhanh tên ${id}: ${value}`}
+        onClick={() => { setDraft(value); setEditing(true); }}>
+        {value}
+      </button>
+    );
+  }
+
+  return (
+    <input autoFocus type="text" className="control inline-table-input" aria-label={`Tên công việc ${id}`} value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+        } else if (event.key === "Escape") {
+          setDraft(value);
+          setEditing(false);
+        }
+      }} />
+  );
+}
+
+function InlineDurationInput({ id, value, onCommit }: { id: string; value: number; onCommit: (days: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => { setDraft(String(value)); }, [value]);
+
+  return (
+    <input type="number" min={1} step={1} inputMode="numeric" className="control inline-duration-input tabular-nums"
+      aria-label={`Số ngày của ${id}`} value={draft}
+      onChange={(event) => {
+        const next = event.target.value;
+        setDraft(next);
+        const parsed = Number(next);
+        if (next.trim() !== "" && Number.isSafeInteger(parsed) && parsed >= 1 && parsed !== value) {
+          onCommit(parsed);
+        }
+      }}
+      onBlur={() => {
+        const parsed = Number(draft);
+        if (draft.trim() === "" || !Number.isSafeInteger(parsed) || parsed < 1) {
+          setDraft(String(value));
+        }
+      }} />
+  );
+}
+
+export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd, onInlineUpdate }: TaskListProps & {
   onAssign: (index: number, assignee: string | null) => void;
   onAdd: () => void;
+  onInlineUpdate?: (index: number, patch: Partial<Task>) => void;
 }) {
   return (
     <div className="panel overflow-hidden">
@@ -258,27 +324,39 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
             <tr>
               <th scope="col" className="px-3 py-2.5">Công việc</th>
               <th scope="col" className="w-[13%] px-3 py-2.5">Nhóm</th>
-              <th scope="col" className="w-20 px-3 py-2.5" title="Ước tính ban đầu">Số ngày</th>
+              <th scope="col" className="w-24 px-3 py-2.5" title="Ước tính ban đầu">Số ngày</th>
               <th scope="col" className="w-[17%] px-3 py-2.5">Tiên quyết</th>
-              <th scope="col" className="w-[25%] px-3 py-2.5">Người phụ trách</th>
+              <th scope="col" className="w-[24%] px-3 py-2.5">Người phụ trách</th>
               <th scope="col" className="w-24 px-3 py-2.5">Trạng thái</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800">
-            {tasks.map((task, index) => (
+            {tasks.map((task, index) => {
+              const locked = lockedTasks.has(task.id);
+              return (
               <tr key={`${task.id}-${index}`} className="hover:bg-white/[0.025]">
                 <td className="px-3 py-2">
-                  <div className="flex items-baseline gap-2">
-                    <span className="max-w-20 truncate font-mono text-[10px] text-zinc-400" title={task.id}>{task.id}</span>
-                    <span className="min-w-0 break-words font-medium">{task.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="max-w-20 shrink-0 truncate font-mono text-[10px] text-zinc-400" title={task.id}>{task.id}</span>
+                    {!locked && onInlineUpdate ? (
+                      <InlineNameInput id={task.id} value={task.name} onCommit={(name) => onInlineUpdate(index, { name })} />
+                    ) : (
+                      <span className="min-w-0 break-words font-medium">{task.name}</span>
+                    )}
                   </div>
-                  {lockedTasks.has(task.id) ? <span className="helper">Đã xác nhận</span> : (
+                  {locked ? <span className="helper">Đã xác nhận</span> : (
                     <button type="button" className="text-link mt-1" onClick={() => onEdit(index)}
                       aria-label={`Chỉnh sửa ${task.id}: ${task.name}`}>Chỉnh sửa</button>
                   )}
                 </td>
                 <td className="max-w-28 break-words px-3 py-2 text-zinc-400">{taskCategory(task)}</td>
-                <td className="px-3 py-2 tabular-nums">{task.duration}</td>
+                <td className="px-3 py-2 tabular-nums">
+                  {!locked && onInlineUpdate ? (
+                    <InlineDurationInput id={task.id} value={task.duration} onCommit={(duration) => onInlineUpdate(index, { duration })} />
+                  ) : (
+                    task.duration
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   {task.dependencies.length ? (
                     <ul className="flex flex-wrap gap-1" role="list" aria-label={`Công việc tiên quyết của ${task.id}`}>
@@ -289,13 +367,13 @@ export function TaskTable({ tasks, members, lockedTasks, onEdit, onAssign, onAdd
                   )}
                 </td>
                 <td className="w-40 px-3 py-2">
-                  <AssigneeSelect task={task} members={members} disabled={lockedTasks.has(task.id)} onChange={(id) => onAssign(index, id)} />
+                  <AssigneeSelect task={task} members={members} disabled={locked} onChange={(id) => onAssign(index, id)} />
                 </td>
                 <td className="whitespace-nowrap px-3 py-2">
                   <span className={`badge ${task.status === "Done" ? "badge-success" : task.status === "Doing" ? "badge-accent" : ""}`}>{task.status ?? "To Do"}</span>
                 </td>
               </tr>
-            ))}
+            ); })}
           </tbody>
         </table>
       </div>

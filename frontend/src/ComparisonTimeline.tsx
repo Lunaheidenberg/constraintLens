@@ -1,5 +1,6 @@
 import { dayOffset, formatDate } from "./calendar";
 import type { ScheduleComparison, TaskComparison } from "./comparison";
+import { splitDeadlineInterval } from "./scheduleView";
 import { timelineAxis } from "./timeline";
 
 const previousBar = "border-dashed border-zinc-300 bg-zinc-600/45";
@@ -28,6 +29,14 @@ export function ComparisonTimeline({ comparison, labels }: {
   const start = calendarDates[0];
   const last = calendarDates[calendarDates.length - 1];
   const span = dayOffset(start, last) + 1;
+  const deadlineBoundaryDay = deadline && deadline.target >= start ? dayOffset(start, deadline.target) + 1 : null;
+  const hasOverdueRevised = deadlineBoundaryDay !== null && tasks.some((task) => {
+    const interval = task.revised?.interval;
+    if (interval) {
+      return dayOffset(start, interval.start) + interval.duration > deadlineBoundaryDay;
+    }
+    return task.revised?.actualFinish ? dayOffset(start, task.revised.actualFinish) + 1 > deadlineBoundaryDay : false;
+  });
   const { width, ticks, position: percent } = timelineAxis(start, span);
   const position = (date: string, fraction = 0) => percent(dayOffset(start, date) + fraction);
   const grid = <>
@@ -45,6 +54,9 @@ export function ComparisonTimeline({ comparison, labels }: {
       <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-300" aria-label="Chú giải biểu đồ">
         <li className="flex items-center gap-1.5"><span aria-hidden="true" className={`h-2.5 w-4 rounded-sm border ${previousBar}`} />{labels.previous}</li>
         <li className="flex items-center gap-1.5"><span aria-hidden="true" className={`h-2.5 w-4 rounded-sm border ${revisedBar}`} />{labels.revised}</li>
+        {hasOverdueRevised && (
+          <li className="flex items-center gap-1.5"><span aria-hidden="true" className="gantt-bar-overdue h-2.5 w-4 rounded-sm border" />Vượt hạn chót</li>
+        )}
         {tasks.some((task) => task.previous?.actualFinish || task.revised?.actualFinish) && (
           <li className="flex items-center gap-1.5"><span aria-hidden="true" className="mx-1 size-2 rotate-45 bg-emerald-400" />Ngày hoàn thành thực tế</li>
         )}
@@ -93,9 +105,21 @@ export function ComparisonTimeline({ comparison, labels }: {
                       className={`absolute ${lane} size-2.5 -translate-x-1/2 rotate-45 rounded-[1px] border border-emerald-300 ${previous ? "bg-[var(--panel)]" : "bg-emerald-400"}`}
                       style={{ left: position(snapshot.actualFinish, 0.5) }} title={`${label} · ${taskTiming(snapshot)}`} />;
                     if (!interval) return null;
-                    return <span key={side} aria-hidden="true"
-                      className={`absolute ${lane} h-3 min-w-px rounded-sm border ${previous ? previousBar : revisedBar}`}
-                      style={{ left: position(interval.start), width: percent(interval.duration) }} title={`${label} · ${taskTiming(snapshot)}`} />;
+                    if (previous || deadlineBoundaryDay === null) {
+                      return <span key={side} aria-hidden="true"
+                        className={`absolute ${lane} h-3 min-w-px rounded-sm border ${previous ? previousBar : revisedBar}`}
+                        style={{ left: position(interval.start), width: percent(interval.duration) }} title={`${label} · ${taskTiming(snapshot)}`} />;
+                    }
+                    const intervalStartDay = dayOffset(start, interval.start);
+                    const split = splitDeadlineInterval(intervalStartDay, intervalStartDay + interval.duration, deadlineBoundaryDay);
+                    return <span key={side} className="contents">
+                      {split.onTime && <span aria-hidden="true"
+                        className={`absolute ${lane} h-3 min-w-px rounded-sm border ${revisedBar}`}
+                        style={{ left: percent(split.onTime.start), width: percent(split.onTime.width) }} title={`${label} · ${taskTiming(snapshot)}`} />}
+                      {split.overdue && <span aria-hidden="true"
+                        className={`absolute ${lane} h-3 min-w-px rounded-sm border gantt-bar-overdue`}
+                        style={{ left: percent(split.overdue.start), width: percent(split.overdue.width) }} title={`${label} · ${taskTiming(snapshot)} (Vượt hạn ${split.overdueDays} ngày)`} />}
+                    </span>;
                   })}
                 </div>
               </div>

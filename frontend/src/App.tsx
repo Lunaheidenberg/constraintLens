@@ -23,6 +23,7 @@ import {
 } from "./projectStorage";
 import { RecoveryAssistant } from "./RecoveryAssistant";
 import { recoveryContext } from "./recoveryContext";
+import { durationDeadlineWarnings } from "./scheduleView";
 import { prepareScheduleResult } from "./schedulingFeedback";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
@@ -206,6 +207,7 @@ export default function App() {
   const importInputRef = useRef<HTMLInputElement>(null);
   const readyDemos = readyDemoPresets();
   const activeRequest = useRef<AbortController | null>(null);
+  const pendingScrollId = useRef<string | null>(null);
   const [workspace, setWorkspace] = useState<Workspace>("setup");
   const focusTarget = useRef<string | null>(null);
   const editVersion = useRef(0);
@@ -299,6 +301,16 @@ export default function App() {
   useEffect(() => () => {
     activeRequest.current?.abort();
   }, []);
+
+  useEffect(() => {
+    const targetId = pendingScrollId.current;
+    if (!targetId || !plans.proposal) return;
+    pendingScrollId.current = null;
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    const reducedMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+  }, [plans.proposal]);
 
   useEffect(() => {
     const isDefaultEmpty =
@@ -517,6 +529,7 @@ export default function App() {
         report("Không thể hiển thị lịch", ["API chưa trả về lịch theo ngày. Kiểm tra phiên bản máy chủ."]);
       } else {
         if (!(await prepareScheduleResult(startedAt, signal, () => setPhase("preparingSchedule")))) return;
+        pendingScrollId.current = "schedule-proposal";
         dispatchPlan({ type: "propose", revision: plans.revision, plan: {
           calendar: solvedCalendar, status: solved.status, scheduledTasks: solved.scheduled_tasks,
           solveTimeMs: solved.solve_time_ms, tasks: ir.tasks, members, scheduleRevision, recovery: null,
@@ -561,6 +574,7 @@ export default function App() {
     const confirmation = source === "progress" ? {
       snapshot, completedTasks: completed_tasks, reviewedTodoTaskIds: todoReview.map(({ id }) => id),
     } : undefined;
+    pendingScrollId.current = "schedule-proposal";
     dispatchPlan({ type: "propose", revision: plans.revision, confirmation, plan: {
       calendar: finish, status, scheduledTasks: scheduled_tasks, solveTimeMs: solve_time_ms,
       tasks: ir.tasks, members, scheduleRevision,
@@ -699,8 +713,6 @@ export default function App() {
 
   function revisePlan() {
     goTo("planning", "tasks-heading");
-    const firstEditable = ir.tasks.findIndex((task) => !lockedTasks.has(task.id));
-    if (firstEditable !== -1) openTaskEditor(firstEditable);
   }
 
   function changeProgress(update: () => void, todoConfirmed: boolean | null = null) {
@@ -776,6 +788,7 @@ export default function App() {
   }
 
   const unassigned = ir.tasks.filter((task) => task.assignee_id == null).length;
+  const durationWarnings = dateErrors.length ? [] : durationDeadlineWarnings(ir.tasks, calendar);
   const currentFeedback = workspace === "planning" ? feedback : workspace === "recovery" ? progressFeedback : null;
   const announcement = workspace === "setup" && assistant.pendingMessage ? assistant.pendingMessage
     : phase ? REQUEST_STATUS[phase] : currentFeedback && !currentFeedback.errors.length ? currentFeedback.message : "";
@@ -1041,12 +1054,16 @@ export default function App() {
               <div className="section-bar">
                 <div>
                   <SectionTitle id="solve-heading" icon={ChartGantt}>Lập lịch</SectionTitle>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                     <p className="helper">Bắt đầu: {calendar.project_start_date ? formatDate(calendar.project_start_date) : "Chưa chọn"} · Hạn: {calendar.target_deadline_date ? formatDate(calendar.target_deadline_date) : "Chưa đặt"}</p>
                     <button className="text-link" onClick={() => goTo("setup", "calendar-heading")}>Chỉnh ngày</button>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="planning-quick-calendar">
+                    <DateField label="Hạn chót nhanh" value={dateInputs.deadline} min={calendar.project_start_date || undefined}
+                      onChange={(value) => changeCalendar("deadline", value)} />
+                  </div>
                   <button className="button" disabled={!!phase || localErrors.length > 0}
                     aria-describedby={localErrors.length ? "solve-requirements" : undefined} onClick={() => void validateProject(false)}>Kiểm tra</button>
                   <button className="button primary schedule-action" disabled={!!phase || localErrors.length > 0 || planningNeedsReport}
@@ -1066,6 +1083,14 @@ export default function App() {
                   Đến báo cáo tiến độ
                 </button>
               </div>}
+              {durationWarnings.length > 0 && (
+                <div className="notice warning" role="status">
+                  <p className="font-semibold">Cảnh báo thời lượng vượt hạn chót (vẫn có thể lập lịch để xem số ngày trễ)</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-4">
+                    {durationWarnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                  </ul>
+                </div>
+              )}
               {localErrors.length > 0 && (
                 <div id="solve-requirements" className="notice warning">
                   <p className="font-semibold">Cần hoàn tất trước khi lập lịch</p>
@@ -1097,6 +1122,7 @@ export default function App() {
                 {unassigned > 0 && <span className="badge badge-warning">{unassigned} chưa phân công</span>}
               </div>
               <TaskTable tasks={ir.tasks} members={members} lockedTasks={lockedTasks} onEdit={openTaskEditor} onAdd={() => openTaskEditor("new")}
+                onInlineUpdate={(index, patch) => updateTask(index, patch)}
                 onAssign={(index, assignee_id) => updateTask(index, { assignee_id })} />
             </section>
             <section aria-labelledby="schedule-heading" className="space-y-3">
