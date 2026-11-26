@@ -17,7 +17,7 @@ export function HelpButton() {
   return (
     <button type="button" className="button guide-trigger" aria-haspopup="dialog"
       onClick={(event) => open(event.currentTarget)}>
-      <CircleHelp size={16} aria-hidden="true" /> Hỏi ConstraintLens
+      <CircleHelp size={16} aria-hidden="true" /> Hướng dẫn sử dụng
     </button>
   );
 }
@@ -95,12 +95,15 @@ function GuidePanel({ workspace, api, onClose }: { workspace: Workspace; api: He
       onClose={() => { activeQuestion.current?.abort(); onClose(); }}>
       <header className="dialog-header guide-header">
         <h2 id="application-guide-title" className="section-title">
-          <CircleHelp size={16} aria-hidden="true" /> Hỏi ConstraintLens
+          <CircleHelp size={16} aria-hidden="true" /> Hướng dẫn sử dụng
         </h2>
         <button type="button" className="button quiet icon-button" aria-label="Đóng trợ giúp"
           onClick={() => dialog.current?.close()}><X size={18} aria-hidden="true" /></button>
       </header>
       <div className="guide-body">
+        <p className="assistant-role-note">
+          Chỉ giải đáp cách thao tác trong ConstraintLens. Để phân tích tiến độ, nguyên nhân trễ hạn hoặc thay đổi của dự án đang mở, hãy mở Trợ lý phân tích lịch tại phần lịch dự kiến hoặc So sánh kế hoạch.
+        </p>
         <form onSubmit={(event) => { event.preventDefault(); void ask(question); }}>
           <label className="field" htmlFor="application-guide-question">Câu hỏi về cách sử dụng</label>
           <div className="guide-form-row">

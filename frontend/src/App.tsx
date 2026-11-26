@@ -13,7 +13,7 @@ import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
 import { PlanningInput, usePlanningAssistant } from "./PlanningAssistant";
 import { planningApplyBlock } from "./planning";
-import { assessDeadline, canAcceptProposal, hasSolution, initialPlans, planReducer, type PlanState } from "./plans";
+import { assessDeadline, canAcceptProposal, comparisonPair, hasSolution, initialPlans, planReducer, type PlanState } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
 import { collectTaskProgress, hasProgressReportEdits, matchesReportedStatuses, parseRemainingDuration, progressFromPlan } from "./progressReport";
 import { hasUnscheduledStatusChanges, todoTasksDueForReview } from "./progressReview";
@@ -22,7 +22,7 @@ import {
   parseWorkspaceJson, saveQuickStartCollapsed, saveStoredWorkspace, serializeWorkspace,
 } from "./projectStorage";
 import { RecoveryAssistant } from "./RecoveryAssistant";
-import { recoveryContext } from "./recoveryContext";
+import { acceptedRecoveryContext, recoveryContext } from "./recoveryContext";
 import { durationDeadlineWarnings } from "./scheduleView";
 import { prepareScheduleResult } from "./schedulingFeedback";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
@@ -1129,18 +1129,26 @@ export default function App() {
               <SectionTitle id="schedule-heading" icon={ChartGantt}>Gantt · Lịch dự kiến</SectionTitle>
               {plans.stale && <p className="notice warning" role="status">Đã bỏ đề xuất vì dữ liệu thay đổi. Hãy lập lịch lại.</p>}
               {proposal?.source === "planning" && renderProposal()}
-              {accepted ? (
-                <section className="panel section-pad space-y-3" aria-labelledby="accepted-heading">
-                  <div className="section-bar">
-                    <h4 id="accepted-heading" className="text-sm font-semibold">Lịch đang áp dụng</h4>
-                    <span className={`badge ${outdated || acceptedAssessment?.daysLate ? "badge-warning" : "badge-success"}`}>{outdated ? "Cần cập nhật" : "Đã chấp nhận"}</span>
-                  </div>
-                  {!!acceptedAssessment?.daysLate && <DeadlineWarning assessment={acceptedAssessment} accepted onRevise={revisePlan} />}
-                  {outdated && <p className="notice warning">Dữ liệu dự án đã thay đổi. Chọn Lập lịch lại để xem lịch cập nhật.</p>}
-                  {progressNotice}
-                  <Schedule plan={accepted} members={members} deadline={acceptedDeadline ?? null} />
-                </section>
-              ) : !proposal && (
+              {accepted ? (() => {
+                const acceptedContext = workspace === "planning" && proposal?.source !== "planning"
+                  ? acceptedRecoveryContext(plans, instance)
+                  : null;
+                return (
+                  <section className="panel section-pad space-y-3" aria-labelledby="accepted-heading">
+                    <div className="section-bar">
+                      <h4 id="accepted-heading" className="text-sm font-semibold">Lịch đang áp dụng</h4>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`badge ${outdated || acceptedAssessment?.daysLate ? "badge-warning" : "badge-success"}`}>{outdated ? "Cần cập nhật" : "Đã chấp nhận"}</span>
+                        {acceptedContext && <RecoveryAssistant key={acceptedContext.key} context={acceptedContext} baseUrl={API_BASE} />}
+                      </div>
+                    </div>
+                    {!!acceptedAssessment?.daysLate && <DeadlineWarning assessment={acceptedAssessment} accepted onRevise={revisePlan} />}
+                    {outdated && <p className="notice warning">Dữ liệu dự án đã thay đổi. Chọn Lập lịch lại để xem lịch cập nhật.</p>}
+                    {progressNotice}
+                    <Schedule plan={accepted} members={members} deadline={acceptedDeadline ?? null} />
+                  </section>
+                );
+              })() : !proposal && (
                 <div className="empty-state" role="status">
                   <CircleHelp size={18} aria-hidden="true" />
                   <div><p className="font-medium text-zinc-100">Chưa có lịch dự kiến</p><p>Chọn ngày bắt đầu, phân công công việc rồi tính lịch ban đầu.</p></div>
@@ -1181,10 +1189,23 @@ export default function App() {
             <section aria-labelledby="recovery-comparison-heading" className="space-y-3">
               <div className="section-bar">
                 <SectionTitle id="recovery-comparison-heading" icon={ChartGantt}>So sánh kế hoạch</SectionTitle>
-                {accepted && <button className="text-link" onClick={() => goTo("planning", "schedule-heading")}>Xem lịch đang áp dụng</button>}
+                <div className="flex flex-wrap items-center gap-3">
+                  {workspace === "recovery" && accepted && proposal?.source !== "progress" && !comparisonPair({ ...plans, proposal: null }) && (() => {
+                    const singleAcceptedContext = acceptedRecoveryContext(plans, instance);
+                    return singleAcceptedContext && <RecoveryAssistant key={singleAcceptedContext.key} context={singleAcceptedContext} baseUrl={API_BASE} />;
+                  })()}
+                  {accepted && <button className="text-link" onClick={() => goTo("planning", "schedule-heading")}>Xem lịch đang áp dụng</button>}
+                </div>
               </div>
               {plans.stale && accepted && <p className="notice warning" role="status">Đã bỏ đề xuất vì dữ liệu thay đổi. Hãy tính lại lịch.</p>}
-              {proposal?.source === "progress" ? renderProposal() : <PlanComparison plans={{ ...plans, proposal: null }} />}
+              {proposal?.source === "progress" ? renderProposal() : (
+                <PlanComparison plans={{ ...plans, proposal: null }}
+                  historyExplanation={(reference) => {
+                    if (workspace !== "recovery") return null;
+                    const context = acceptedRecoveryContext(plans, instance, reference);
+                    return context && <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} />;
+                  }} />
+              )}
             </section>
           </section>
         </div>

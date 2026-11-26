@@ -15,9 +15,9 @@ The FastAPI draft and planning endpoints read `GEMINI_API_KEY` on the server. Th
 
 Each planning endpoint can retry once on the same model after HTTP 503 or 504. Both attempts and a 200–400 ms delay share a 45-second deadline, with at least five seconds reserved for a retry. The optional `GEMINI_DRAFT_FALLBACK_MODEL` still applies to `/api/parse/draft` and is disabled by default.
 
-## Hỏi ConstraintLens
+## Hướng dẫn sử dụng
 
-Mở **Hỏi ConstraintLens** ở thanh dự án hoặc trong trình chỉnh sửa công việc. Hỏi bằng tiếng Việt tự nhiên, có thể bỏ dấu hoặc dùng cách nói như “Bảng Kanban xài như thế nào?”. Bạn có thể hỏi về tab khác hoặc chọn một câu hỏi gợi ý. Câu hỏi có tối đa 240 ký tự. Bấm **Đóng trợ giúp** hoặc `Esc` để quay lại vị trí vừa mở.
+Mở **Hướng dẫn sử dụng** (trợ giúp thao tác ConstraintLens) ở thanh dự án hoặc trong trình chỉnh sửa công việc. Hỏi bằng tiếng Việt tự nhiên, có thể bỏ dấu hoặc dùng cách nói như “Bảng Kanban xài như thế nào?”. Bạn có thể hỏi về tab khác hoặc chọn một câu hỏi gợi ý. Câu hỏi có tối đa 240 ký tự. Bấm **Đóng trợ giúp** hoặc `Esc` để quay lại vị trí vừa mở.
 
 - `GET /api/help/topics?workspace=setup|planning|recovery` trả về câu hỏi gợi ý theo tab.
 - `POST /api/help/ask` nhận `question` và `workspace`, rồi trả về `topic`, `answer` và `suggestions`.

@@ -146,7 +146,11 @@ function ComparisonDetails({ comparison, labels }: {
   );
 }
 
-export function PlanComparison({ plans, proposalExplanation }: { plans: PlanState; proposalExplanation?: ReactNode }) {
+export function PlanComparison({ plans, proposalExplanation, historyExplanation }: {
+  plans: PlanState;
+  proposalExplanation?: ReactNode;
+  historyExplanation?: (reference: ComparisonReference) => ReactNode;
+}) {
   const [reference, setReference] = useState<ComparisonReference>("previous");
   const pair = comparisonPair(plans, reference);
   if (!pair) return <div className="empty-state">
@@ -178,7 +182,12 @@ export function PlanComparison({ plans, proposalExplanation }: { plans: PlanStat
       {pair.mode !== "proposal" && plans.acceptedRevision !== plans.revision && (
         <p className="notice warning">Đang so sánh các lịch đã chấp nhận. Hãy tính lại lịch để đánh giá dữ liệu vừa chỉnh sửa.</p>
       )}
-      {pair.mode !== "proposal" && <p className="helper">Trợ lý giải thích thay đổi hỗ trợ đề xuất hiện tại. Bạn đang xem lịch sử các lịch đã chấp nhận.</p>}
+      {pair.mode !== "proposal" && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="helper">Bạn đang xem lịch sử các lịch đã chấp nhận. Có thể mở Trợ lý phân tích lịch để đối chiếu hai bản lịch này.</p>
+          {historyExplanation?.(reference)}
+        </div>
+      )}
       {comparison ? (
         <>
           <ComparisonSummary comparison={comparison} labels={labels} />

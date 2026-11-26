@@ -1,6 +1,15 @@
-import { comparisonPair, type Plan, type PlanState } from "./plans.ts";
+import { comparisonPair, type ComparisonReference, type Plan, type PlanState } from "./plans.ts";
 import { progressFromPlan } from "./progressReport.ts";
 import type { RecoverySnapshot } from "./recoveryApi";
+
+export interface RecoveryContext {
+  key: string;
+  mode: "proposal" | "accepted" | "history";
+  accepted: RecoverySnapshot | null;
+  proposal: RecoverySnapshot;
+  roleLabels: { accepted: string; proposal: string };
+  summary: string;
+}
 
 // Two proposals can share the same input and accepted revisions. Each solved Plan is a new object.
 const planRefs = new WeakMap<Plan, number>();
@@ -41,7 +50,7 @@ function toSnapshot(plan: Plan, projectRef: string): RecoverySnapshot | null {
   };
 }
 
-export function recoveryContext(plans: PlanState, projectInstance: number) {
+export function recoveryContext(plans: PlanState, projectInstance: number): RecoveryContext | null {
   const { proposal, accepted, revision } = plans;
   if (!proposal || proposal.revision !== revision) return null;
 
@@ -53,7 +62,48 @@ export function recoveryContext(plans: PlanState, projectInstance: number) {
 
   return {
     key: `${before?.snapshot_ref ?? "initial"}/${after.snapshot_ref}/revision-${revision}`,
+    mode: "proposal",
     accepted: before,
     proposal: after,
+    roleLabels: { accepted: "Lịch đang áp dụng", proposal: "Lịch đề xuất" },
+    summary: before
+      ? "Phân tích lịch đang áp dụng và đề xuất hiện tại."
+      : "Phân tích lịch ban đầu đề xuất. Chưa có lịch đã chấp nhận để đối chiếu.",
+  };
+}
+
+export function acceptedRecoveryContext(
+  plans: PlanState,
+  projectInstance: number,
+  reference?: ComparisonReference,
+): RecoveryContext | null {
+  if (!plans.accepted) return null;
+  const projectRef = `project-${projectInstance}`;
+  if (reference) {
+    const pair = comparisonPair({ ...plans, proposal: null }, reference);
+    if (pair) {
+      const before = toSnapshot(pair.previous, projectRef);
+      const after = toSnapshot(pair.revised, projectRef);
+      if (!before || !after) return null;
+      const beforeLabel = pair.mode === "baseline" ? "Lịch gốc" : "Lịch trước đó";
+      return {
+        key: `history-${pair.mode}/${before.snapshot_ref}/${after.snapshot_ref}`,
+        mode: "history",
+        accepted: before,
+        proposal: after,
+        roleLabels: { accepted: beforeLabel, proposal: "Lịch đã chấp nhận hiện tại" },
+        summary: `Phân tích so sánh giữa ${beforeLabel} và Lịch đã chấp nhận hiện tại.`,
+      };
+    }
+  }
+  const current = toSnapshot(plans.accepted, projectRef);
+  if (!current) return null;
+  return {
+    key: `accepted/${current.snapshot_ref}`,
+    mode: "accepted",
+    accepted: null,
+    proposal: current,
+    roleLabels: { accepted: "Lịch trước đó", proposal: "Lịch đang áp dụng" },
+    summary: "Phân tích lịch đang áp dụng hiện tại. Chưa đối chiếu với bản lịch khác.",
   };
 }

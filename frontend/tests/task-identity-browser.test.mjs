@@ -162,7 +162,7 @@ function prepareTaskIdentityScenario() {
     check(rows.includes("T8Seed books") && rows.includes("Đã bỏ") &&
       rows.includes(`${newId}Database backup`) && rows.includes("Mới thêm"), "Comparison merged distinct tasks");
     check(acceptedGantt().textContent === initial, "Edits changed the accepted dates, names or assignments");
-    await click("Giải thích thay đổi");
+    await click("Trợ lý phân tích lịch");
     await click("Công việc nào đang bị ảnh hưởng?");
     const { accepted, proposal: revised } = await waitFor(() => recoveries.at(-1), "Recovery request missing");
     check(accepted.tasks.some(({ id, name }) => id === "T8" && name === "Seed books") &&

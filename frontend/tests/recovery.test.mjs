@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initialPlans, planReducer } from "../src/plans.ts";
 import { explainRecovery } from "../src/recoveryApi.ts";
-import { recoveryContext } from "../src/recoveryContext.ts";
-import { describeRecoveryFact } from "../src/recoveryFacts.ts";
+import { acceptedRecoveryContext, recoveryContext } from "../src/recoveryContext.ts";
+import { describeRecoveryFact, summarizeRecovery } from "../src/recoveryFacts.ts";
 
 test("F5: Recovery uses scheduled order and keeps completed work out of that order", () => {
   const render = (kind, data, task_ids) => describeRecoveryFact({ kind, data, task_ids }, (id) => id);
@@ -82,6 +82,61 @@ test("Recovery allows an initial or all-completed proposal and excludes missing,
   const history = accept(completed);
   assert.equal(history.previous, original);
   assert.equal(recoveryContext(history, 0), null);
+
+  assert.equal(acceptedRecoveryContext(initialPlans, 0), null);
+  const singleAccepted = acceptedRecoveryContext(active, 0);
+  assert.equal(singleAccepted.mode, "accepted");
+  assert.equal(singleAccepted.accepted, null);
+  assert.equal(singleAccepted.proposal.tasks.length, 2);
+
+  const historyPrev = acceptedRecoveryContext(history, 0, "previous");
+  assert.equal(historyPrev.mode, "history");
+  assert.equal(historyPrev.accepted.tasks[0].name, "Bàn giao");
+  assert.deepEqual(historyPrev.proposal.progress.actual_finishes, { T1: "2026-11-21", T2: "2026-11-24" });
+
+  const historyBase = acceptedRecoveryContext(history, 0, "baseline");
+  assert.equal(historyBase.mode, "history");
+  assert.equal(historyBase.roleLabels.accepted, "Lịch gốc");
+});
+
+test("summarizeRecovery produces grounded 1-2 sentence TL;DR from verified facts only", () => {
+  const baseResponse = {
+    context_ref: "ctx",
+    ai_status: "skipped",
+    basis: {
+      accepted_ref: null, proposal_ref: "p1", selected_role: "proposal",
+      comparison: "single_schedule", evaluation_deadline_date: "2026-11-26",
+      intent: "overview", highlighted_fact_ids: ["proposal:schedule", "proposal:deadline", "proposal:dependency:T1:T2"],
+    },
+    facts: [
+      { id: "proposal:schedule", kind: "schedule", role: "proposal", task_ids: [],
+        data: { final_work_date: "2026-11-29", completion_kind: "scheduled" } },
+      { id: "proposal:deadline", kind: "deadline", role: "proposal", task_ids: [],
+        data: { target_deadline_date: "2026-11-26", days_late: 3, status: "late" } },
+      { id: "proposal:dependency:T1:T2", kind: "dependency", role: "proposal", task_ids: ["T1", "T2"],
+        data: { tight: true } },
+    ],
+    possible_explanations: [], suggestions: [], unknowns: [],
+  };
+  const lateTldr = summarizeRecovery(baseResponse, (id) => id);
+  assert.equal(lateTldr.length, 2);
+  assert.equal(lateTldr[0], "Lịch dự kiến kết thúc ngày 29/11/2026, trễ 3 ngày so với hạn 26/11/2026.");
+  assert.match(lateTldr[1], /T2 phụ thuộc vào T1/);
+
+  const comparedTldr = summarizeRecovery({
+    ...baseResponse,
+    basis: { ...baseResponse.basis, accepted_ref: "a1", comparison: "compared" },
+    facts: [
+      { id: "proposal:schedule", kind: "schedule", role: "proposal", task_ids: [],
+        data: { final_work_date: "2026-11-24", completion_kind: "actual" } },
+      { id: "proposal:deadline", kind: "deadline", role: "proposal", task_ids: [],
+        data: { target_deadline_date: null, days_late: null, status: null } },
+      { id: "comparison:schedule_change", kind: "schedule_change", role: null, task_ids: [],
+        data: { no_changes: false, finish_delta_days: -2, moved_count: 1 } },
+    ],
+  }, (id) => id);
+  assert.equal(comparedTldr[0], "Dự án đã hoàn thành thực tế ngày 24/11/2026 (chưa đặt hạn mục tiêu).");
+  assert.equal(comparedTldr[1], "So với lịch đối chiếu: ngày kết thúc 2 ngày sớm hơn, có 1 công việc đổi khoảng lịch.");
 });
 
 test("Recovery client validates the contract and preserves fallback facts", async (t) => {

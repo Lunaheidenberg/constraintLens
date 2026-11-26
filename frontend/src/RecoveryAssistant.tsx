@@ -1,8 +1,8 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { LoaderCircle, MessageSquareText } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { LoaderCircle, MessageSquareText, X } from "lucide-react";
 import { explainRecovery, type RecoveryExplanation, type RecoveryFact, type RecoveryIntent, type RecoveryResponse } from "./recoveryApi";
-import type { recoveryContext } from "./recoveryContext";
-import { describeRecoveryFact } from "./recoveryFacts";
+import type { RecoveryContext } from "./recoveryContext";
+import { describeRecoveryFact, summarizeRecovery } from "./recoveryFacts";
 
 const QUESTIONS: { text: string; intent: RecoveryIntent; comparison?: true }[] = [
   { text: "Tại sao lịch của tôi thay đổi?", intent: "causes", comparison: true },
@@ -20,8 +20,7 @@ const AI_MESSAGES: Partial<Record<RecoveryResponse["ai_status"], string>> = {
   invalid_output: "Phản hồi từ Gemini không dùng được.",
 };
 
-type Context = NonNullable<ReturnType<typeof recoveryContext>>;
-const ROLE_LABELS = { accepted: "Lịch đang áp dụng", proposal: "Lịch đề xuất" };
+type Context = RecoveryContext;
 
 function ResultList<T>({ items, preview, empty, render }: {
   items: T[]; preview: number; empty: string; render: (item: T) => ReactNode;
@@ -49,9 +48,10 @@ function RecoveryResult({ result, context, headingId }: { result: RecoveryRespon
     (kind === "schedule" && role === result.basis.selected_role && data.completion_kind === "actual"));
   const orderedIds = new Set([...summaryFacts.map(({ id }) => id), ...result.basis.highlighted_fact_ids, ...factsById.keys()]);
   const facts = [...orderedIds].flatMap((id) => factsById.get(id) ?? []);
+  const summaryLines = summarizeRecovery(result, task);
   const aiMessage = AI_MESSAGES[result.ai_status];
   const renderFact = (fact: RecoveryFact) => <li key={fact.id}>
-    {fact.role && <span className="helper">{ROLE_LABELS[fact.role]} · </span>}{describeRecoveryFact(fact, (id) => task(id, fact.role))}
+    {fact.role && <span className="helper">{context.roleLabels[fact.role]} · </span>}{describeRecoveryFact(fact, (id) => task(id, fact.role))}
   </li>;
   const renderExplanation = (item: RecoveryExplanation) => {
     const evidence = [...new Set(item.fact_ids)].flatMap((id) => factsById.get(id) ?? []);
@@ -65,9 +65,15 @@ function RecoveryResult({ result, context, headingId }: { result: RecoveryRespon
     </li>;
   };
 
-  return <div className="space-y-3">
+  return <div className="recovery-results-wrap">
     {aiMessage && <p className="notice notice-info">{aiMessage} Bạn vẫn có thể xem phân tích dựa trên dữ kiện lịch.</p>}
     <div className="recovery-results" role="region" aria-labelledby={headingId} tabIndex={0}>
+      {summaryLines.length > 0 && (
+        <section className="recovery-tldr" aria-label="Tóm tắt nhanh">
+          <p className="eyebrow text-[var(--accent)]">Tóm tắt nhanh (TL;DR)</p>
+          <p className="mt-1 text-sm text-zinc-100">{summaryLines.join(" ")}</p>
+        </section>
+      )}
       <section>
         <h6 id={headingId} className="font-semibold text-[var(--success)]">Dữ kiện đã kiểm tra</h6>
         <ResultList items={facts} preview={5} render={renderFact} empty="Chưa có dữ kiện lịch để hiển thị." />
@@ -118,6 +124,18 @@ export function RecoveryAssistant({ context, baseUrl }: { context: Context; base
     trigger.current?.focus();
   }
 
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (document.querySelector("dialog[open]")) return;
+      event.preventDefault();
+      close();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
+
   async function ask(value: string, intent?: RecoveryIntent) {
     const text = value.trim();
     if (!text || activeRequest.current) return;
@@ -142,7 +160,7 @@ export function RecoveryAssistant({ context, baseUrl }: { context: Context; base
     }
   }
 
-  return <div data-recovery-assistant className="space-y-3" onKeyDown={(event) => {
+  return <div data-recovery-assistant className="inline-flex" onKeyDown={(event) => {
     if (open && event.key === "Escape") {
       event.stopPropagation();
       close();
@@ -150,15 +168,17 @@ export function RecoveryAssistant({ context, baseUrl }: { context: Context; base
   }}>
     <button ref={trigger} type="button" className="button guide-trigger" aria-expanded={open} aria-controls={open ? `${id}-panel` : undefined}
       onClick={() => open ? close() : setOpen(true)}>
-      <MessageSquareText size={16} aria-hidden="true" /> Giải thích thay đổi
+      <MessageSquareText size={16} aria-hidden="true" /> Trợ lý phân tích lịch
     </button>
-    {open && <section id={`${id}-panel`} className="recovery-assistant space-y-3" aria-labelledby={`${id}-title`}>
-      <div className="section-bar">
-        <h5 id={`${id}-title`} className="font-semibold">Trợ lý giải thích lịch</h5>
-        <button type="button" className="button" onClick={close}>Đóng trợ lý</button>
+    {open && <section id={`${id}-panel`} className="recovery-assistant" aria-labelledby={`${id}-title`}>
+      <div className="recovery-drawer-header">
+        <h5 id={`${id}-title`} className="font-semibold">Trợ lý phân tích lịch</h5>
+        <button type="button" className="button" onClick={close}><X size={15} aria-hidden="true" /> Đóng trợ lý</button>
       </div>
-      <p className="helper">{context.accepted ? "Phân tích lịch đang áp dụng và đề xuất hiện tại."
-        : "Phân tích lịch ban đầu đề xuất. Chưa có lịch đã chấp nhận để đối chiếu."}</p>
+      <p className="helper">{context.summary}</p>
+      <p className="assistant-role-note">
+        Phân tích trực tiếp dữ liệu lịch của dự án này. Nếu cần hỏi cách dùng ứng dụng, hãy mở Hướng dẫn sử dụng ở thanh trên cùng.
+      </p>
       <form onSubmit={(event) => { event.preventDefault(); void ask(question); }}>
         <label className="field" htmlFor={`${id}-question`}>Câu hỏi của bạn</label>
         <div className="recovery-form-row">

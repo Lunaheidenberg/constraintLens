@@ -148,7 +148,7 @@ function prepareRecoveryScenario() {
   const proposal = () => find("#schedule-proposal");
   const report = () => find('[aria-label="Tiến độ công việc"]').textContent;
   const launch = async () => {
-    await click("Giải thích thay đổi");
+    await click("Trợ lý phân tích lịch");
     return waitFor(panel, "Recovery did not open");
   };
   const ask = async (text) => {
@@ -177,7 +177,7 @@ function prepareRecoveryScenario() {
     change(find(".setup-calendar-fields input"), "20/11/2026");
     change(find(".setup-calendar-fields .date-field:nth-child(2) input"), "26/11/2026");
     await go("recovery");
-    check(!button("Giải thích thay đổi"), "Empty project offered Recovery without a schedule");
+    check(!button("Trợ lý phân tích lịch"), "Empty project offered Recovery without a schedule");
     await go("planning");
     await click("Tính lịch ban đầu");
     const initial = await launch();
@@ -192,6 +192,7 @@ function prepareRecoveryScenario() {
     const acceptedBefore = find('[aria-labelledby="accepted-heading"]').lastElementChild.textContent;
 
     await click("Lập lịch lại");
+    await waitFor(proposal, "Missing unchanged reschedule proposal");
     await launch();
     const unchanged = await ask();
     check(unchanged.payload.accepted.snapshot_ref === initialRequest.payload.proposal.snapshot_ref &&
@@ -229,6 +230,7 @@ function prepareRecoveryScenario() {
     change(firstFinish, "21/11/2026");
     change(remain(), "8");
     await click("Đề xuất lịch mới");
+    await waitFor(proposal, "Missing late recovery proposal");
     const latePanel = await launch();
     const lateProposal = proposal();
     const reportBefore = report();
@@ -304,7 +306,7 @@ function prepareRecoveryScenario() {
     check(reopened.payload.context_ref !== closed.payload.context_ref && panel().textContent.includes("Đang phân tích lịch"),
       "Canceled request cleared a newer pending request");
     await click("Đề xuất lịch mới");
-    await waitFor(() => button("Giải thích thay đổi")?.getAttribute("aria-expanded") === "false",
+    await waitFor(() => button("Trợ lý phân tích lịch")?.getAttribute("aria-expanded") === "false",
       "Successful recalculation did not replace the old Recovery context");
     await launch();
     const replacement = await ask();
@@ -317,6 +319,7 @@ function prepareRecoveryScenario() {
     check(report() === reportBefore, "Canceling the proposal removed the confirmed progress report");
 
     await click("Đề xuất lịch mới");
+    await waitFor(proposal, "Proposal missing before task edit test");
     await launch();
     const beforeTaskEdit = await ask();
     find('button[aria-label^="Sửa công việc T2 trên Kanban"]').click();
@@ -326,6 +329,7 @@ function prepareRecoveryScenario() {
     await noOldAnswer(beforeTaskEdit, "Editing T2");
 
     await click("Đề xuất lịch mới");
+    await waitFor(proposal, "Proposal missing before progress edit test");
     await launch();
     const beforeProgressEdit = await ask();
     change(remain(), "2");
@@ -333,6 +337,7 @@ function prepareRecoveryScenario() {
     await noOldAnswer(beforeProgressEdit, "Changing the remaining duration");
 
     await click("Đề xuất lịch mới");
+    await waitFor(proposal, "Proposal missing before acceptance test");
     await launch();
     const valid = await ask();
     check(valid.payload.accepted.tasks[1].estimated_duration === 3 && valid.payload.proposal.tasks[1].estimated_duration === 4,
@@ -340,7 +345,15 @@ function prepareRecoveryScenario() {
     await click("Chấp nhận lịch");
     await waitFor(() => !proposal() && find("#schedule-comparison")?.textContent.includes("Bạn đang xem lịch sử"), "Historical notice missing");
     await noOldAnswer(valid, "Accepting a valid proposal");
-    check(!button("Giải thích thay đổi"), "Historical comparison offered misleading Recovery action");
+    const historyPanel = await launch();
+    const historyReq = await ask("Vì sao lịch trước và hiện tại khác nhau?");
+    check(historyReq.payload.accepted?.snapshot_ref && historyReq.payload.proposal?.snapshot_ref &&
+      historyReq.payload.accepted.snapshot_ref !== historyReq.payload.proposal.snapshot_ref,
+      "Historical Recovery did not send both accepted comparison snapshots");
+    historyReq.respond("skipped");
+    await shown("Tóm tắt nhanh (TL;DR)");
+    check(Boolean(historyPanel.querySelector(".recovery-tldr")), "Historical Recovery missing TL;DR summary");
+    await click("Đóng trợ lý");
 
     await go("planning");
     const acceptedAfterProgress = find('[aria-labelledby="accepted-heading"]').lastElementChild.textContent;
@@ -400,6 +413,7 @@ function prepareRecoveryScenario() {
     change(find(".progress-dates input"), "25/11/2026");
     change(await waitFor(() => actualFinish("T2"), "Missing T2 finish"), "25/11/2026");
     await click("Đề xuất lịch mới");
+    await waitFor(proposal, "Completed proposal missing");
     await launch();
     const complete = await ask();
     check(complete.payload.proposal.scheduled_tasks.length === 0 && complete.payload.proposal.progress.actual_finishes.T2 === "2026-11-25",
@@ -413,7 +427,7 @@ function prepareRecoveryScenario() {
     await waitFor(() => find("#project-heading").textContent === "Dự án khác", "Project switch failed");
     await noOldAnswer(leaving, "Switching projects");
     await go("recovery");
-    check(!button("Giải thích thay đổi"), "New project inherited previous schedule analysis");
+    check(!button("Trợ lý phân tích lịch"), "New project inherited previous schedule analysis");
 
     // Leave an initial proposal open for keyboard input and viewport checks via CDP.
     await go("setup");
@@ -423,7 +437,12 @@ function prepareRecoveryScenario() {
     change(find(".setup-calendar-fields .date-field:nth-child(2) input"), "26/11/2026");
     await go("planning");
     await click("Tính lịch ban đầu");
+    await waitFor(proposal, "Initial desktop proposal missing");
+    const ganttOffset = () => find("#schedule-proposal .panel").getBoundingClientRect().top - proposal().getBoundingClientRect().top;
+    const ganttBeforeDrawer = ganttOffset();
     await launch();
+    const ganttWithDrawer = ganttOffset();
+    check(Math.abs(ganttWithDrawer - ganttBeforeDrawer) < 1, "Opening Recovery side drawer pushed Gantt vertically");
     const mobileAnswer = await ask();
     mobileAnswer.respond("unavailable");
     await shown("Dữ kiện đã kiểm tra");
@@ -434,6 +453,20 @@ function prepareRecoveryScenario() {
 test("React production UI explains the displayed schedule without applying changes or showing stale Recovery results",
   { skip: !browser && "Set CONSTRAINTLENS_TEST_BROWSER to run the browser regression" }, async () => {
     await withProductionBrowser(prepareRecoveryScenario, async (socket) => {
+      const desktopLayout = await evaluate(socket, `(() => {
+        const panel = document.querySelector('.recovery-assistant');
+        const tldr = panel.querySelector('.recovery-tldr');
+        const factsHeading = panel.querySelector('.recovery-results h6');
+        const rect = panel.getBoundingClientRect();
+        return {
+          isRightDrawer: getComputedStyle(panel).position === 'fixed' && rect.left > 0 && rect.right <= innerWidth && rect.width < innerWidth,
+          tldrBeforeFacts: Boolean(tldr && factsHeading && (tldr.compareDocumentPosition(factsHeading) & Node.DOCUMENT_POSITION_FOLLOWING)),
+          tldrText: tldr?.textContent ?? '',
+        };
+      })()`);
+      assert.ok(desktopLayout.isRightDrawer, `Desktop drawer positioning invalid ${JSON.stringify(desktopLayout)}`);
+      assert.ok(desktopLayout.tldrBeforeFacts && desktopLayout.tldrText.includes("Tóm tắt nhanh"),
+        `Desktop TL;DR missing or misplaced ${JSON.stringify(desktopLayout)}`);
       const fits = `(() => {
         const panel = document.querySelector('.recovery-assistant');
         const results = panel.querySelector('.recovery-results');

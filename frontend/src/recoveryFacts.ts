@@ -1,5 +1,5 @@
 import { formatDate, isCalendarDate } from "./calendar.ts";
-import type { RecoveryFact } from "./recoveryApi";
+import type { RecoveryFact, RecoveryResponse } from "./recoveryApi";
 
 function date(value: unknown) {
   return typeof value === "string" && isCalendarDate(value) ? formatDate(value) : "chưa rõ";
@@ -65,4 +65,66 @@ export function describeRecoveryFact({ kind, data, task_ids }: RecoveryFact, tas
     case "attention":
       return `${tasks} có dữ kiện về thời điểm, thời lượng hoặc phụ thuộc cần xem lại.`;
   }
+}
+
+export function summarizeRecovery(
+  result: RecoveryResponse,
+  task: (id: string, role?: RecoveryFact["role"]) => string,
+): string[] {
+  const lines: string[] = [];
+  const selectedRole = result.basis.selected_role;
+  const scheduleFact = result.facts.find((fact) => fact.kind === "schedule" && fact.role === selectedRole);
+  const deadlineFact = result.facts.find((fact) => fact.kind === "deadline" && fact.role === selectedRole);
+
+  if (scheduleFact) {
+    const finishText = date(scheduleFact.data.final_work_date);
+    const base = scheduleFact.data.completion_kind === "actual"
+      ? `Dự án đã hoàn thành thực tế ngày ${finishText}`
+      : `Lịch dự kiến kết thúc ngày ${finishText}`;
+    if (!deadlineFact) {
+      lines.push(`${base}.`);
+    } else if (deadlineFact.data.target_deadline_date === null) {
+      lines.push(`${base} (chưa đặt hạn mục tiêu).`);
+    } else if (deadlineFact.data.status === "on_time") {
+      lines.push(`${base}, đáp ứng hạn mục tiêu ${date(deadlineFact.data.target_deadline_date)}.`);
+    } else if (deadlineFact.data.status === "late" && typeof deadlineFact.data.days_late === "number") {
+      lines.push(`${base}, trễ ${deadlineFact.data.days_late} ngày so với hạn ${date(deadlineFact.data.target_deadline_date)}.`);
+    } else {
+      lines.push(`${base} (hạn mục tiêu ${date(deadlineFact.data.target_deadline_date)}).`);
+    }
+  } else if (deadlineFact) {
+    lines.push(describeRecoveryFact(deadlineFact, (id) => task(id, deadlineFact.role)));
+  }
+
+  const changeFact = result.basis.comparison === "compared"
+    ? result.facts.find((fact) => fact.kind === "schedule_change")
+    : undefined;
+  if (changeFact) {
+    if (changeFact.data.no_changes === true) {
+      lines.push("Không có thay đổi về khoảng lịch, hạn mục tiêu hoặc tiến độ giữa hai bản lịch.");
+    } else {
+      const finishShift = shift(changeFact.data.finish_delta_days);
+      const moved = typeof changeFact.data.moved_count === "number"
+        ? `, có ${changeFact.data.moved_count} công việc đổi khoảng lịch`
+        : "";
+      lines.push(`So với lịch đối chiếu: ngày kết thúc ${finishShift}${moved}.`);
+    }
+  } else {
+    const extraFact = result.basis.highlighted_fact_ids
+      .map((id) => result.facts.find((fact) => fact.id === id))
+      .find((fact): fact is RecoveryFact => Boolean(fact && fact !== scheduleFact && fact !== deadlineFact));
+    if (extraFact) {
+      lines.push(describeRecoveryFact(extraFact, (id) => task(id, extraFact.role)));
+    }
+  }
+
+  if (!lines.length) {
+    if (result.facts.length > 0) {
+      const first = result.facts[0];
+      lines.push(describeRecoveryFact(first, (id) => task(id, first.role)));
+    } else if (result.unknowns.length > 0) {
+      lines.push(result.unknowns[0].text);
+    }
+  }
+  return lines;
 }
