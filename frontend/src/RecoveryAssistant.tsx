@@ -96,7 +96,7 @@ function RecoveryResult({ result, context, headingId }: { result: RecoveryRespon
   </div>;
 }
 
-export function RecoveryAssistant({ context, baseUrl }: { context: Context; baseUrl: string }) {
+export function RecoveryAssistant({ context, baseUrl, sessionApiKey }: { context: Context; baseUrl: string; sessionApiKey?: string }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -148,7 +148,7 @@ export function RecoveryAssistant({ context, baseUrl }: { context: Context; base
     setError("");
     try {
       const result = await explainRecovery(baseUrl, { context_ref, question: text, intent,
-        accepted: context.accepted, proposal: context.proposal }, controller.signal);
+        accepted: context.accepted, proposal: context.proposal }, controller.signal, sessionApiKey);
       if (activeRequest.current === controller) setAnswer(result);
     } catch (issue) {
       if (activeRequest.current === controller) setError(issue instanceof Error ? issue.message : "Chưa thể giải thích lịch. Vui lòng thử lại.");

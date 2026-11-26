@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ChangeEvent } from "react";
 import {
   ArrowDown, ArrowRight, CalendarDays, ChartGantt, Check, ChevronDown, ChevronUp, CircleHelp,
-  Download, FilePlus2, Info, Layers3, LayoutGrid, ListTodo, LoaderCircle, Pencil, Play, Plus,
-  Settings2, Sparkles, Upload, UsersRound, X,
+  Download, FilePlus2, Info, KeyRound, Layers3, LayoutGrid, ListTodo, LoaderCircle, Pencil, Play, Plus,
+  RefreshCw, Settings2, Sparkles, Upload, UsersRound, X,
 } from "lucide-react";
 import { ApplicationGuide, HelpButton, type HelpApi } from "./ApplicationGuide";
 import { formatDate, isCalendarDate, parseDateInput } from "./calendar";
@@ -12,7 +12,7 @@ import { readyDemoPresets, type ReadyDemoPreset } from "./demoPresets";
 import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
 import { PlanningInput, usePlanningAssistant } from "./PlanningAssistant";
-import { planningApplyBlock } from "./planning";
+import { mergeConfirmedMembers, planningApplyBlock } from "./planning";
 import { assessDeadline, canAcceptProposal, comparisonPair, hasSolution, initialPlans, planReducer, type PlanState } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
 import { collectTaskProgress, hasProgressReportEdits, matchesReportedStatuses, parseRemainingDuration, progressFromPlan } from "./progressReport";
@@ -27,7 +27,7 @@ import { durationDeadlineWarnings } from "./scheduleView";
 import { prepareScheduleResult } from "./schedulingFeedback";
 import { Kanban, Members, TaskDialog, TaskTable, taskCategory } from "./ProjectEditor";
 import { Schedule } from "./Schedule";
-import type { PresetsMap, ProgressSnapshot, ProjectCalendar, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse, Workspace } from "./types";
+import type { AiStatus, PresetsMap, ProgressSnapshot, ProjectCalendar, RescheduleRequest, RescheduleResult, SchedulingIR, SolveRequest, SolveResponse, Task, ValidateResponse, Workspace } from "./types";
 
 const API_BASE = "http://localhost:8000";
 
@@ -65,10 +65,22 @@ function calendarErrors(calendar: ProjectCalendar, deadlineInput: string) {
   return [];
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+function isAiPath(path: string) {
+  return path.startsWith("/api/planning/") || path.startsWith("/api/parse/") ||
+    path.startsWith("/api/help/") || path.startsWith("/api/recovery/") || path.startsWith("/api/ai/");
+}
+
+async function request<T>(path: string, options?: RequestInit, sessionApiKey?: string): Promise<T> {
   let response: Response;
+  const trimmedKey = sessionApiKey?.trim();
+  let requestOptions = options;
+  if (trimmedKey && isAiPath(path)) {
+    const headers = new Headers(options?.headers);
+    headers.set("X-Gemini-Api-Key", trimmedKey);
+    requestOptions = { ...options, headers };
+  }
   try {
-    response = await fetch(API_BASE + path, options);
+    response = await fetch(API_BASE + path, requestOptions);
   } catch (error) {
     if (options?.signal?.aborted) throw error;
     throw new Error("Không kết nối được API. Kiểm tra máy chủ tại cổng 8000 rồi thử lại.");
@@ -89,19 +101,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 }
 
-function post<T>(path: string, body: unknown, signal?: AbortSignal) {
+function post<T>(path: string, body: unknown, signal?: AbortSignal, sessionApiKey?: string) {
   return request<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
-  });
+  }, sessionApiKey);
 }
-
-const helpApi: HelpApi = {
-  topics: (workspace, signal) => request(`/api/help/topics?workspace=${workspace}`, { signal }),
-  ask: (workspace, question, signal) => post("/api/help/ask", { workspace, question }, signal),
-};
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -174,6 +181,94 @@ function appPlanReducer(state: PlanState, action: AppPlanAction): PlanState {
   return action.type === "hydrate" ? action.plans : planReducer(state, action);
 }
 
+function AiSettingsDialog({
+  aiStatus,
+  loading,
+  sessionApiKey,
+  onSaveSessionKey,
+  onRefreshStatus,
+  onClose,
+}: {
+  aiStatus: AiStatus | null;
+  loading: boolean;
+  sessionApiKey: string;
+  onSaveSessionKey: (key: string) => void;
+  onRefreshStatus: () => void;
+  onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [draftKey, setDraftKey] = useState(sessionApiKey);
+  const configured = Boolean(aiStatus?.configured || sessionApiKey.trim());
+
+  useLayoutEffect(() => {
+    const modal = dialog.current;
+    if (modal && !modal.open) modal.showModal();
+  }, []);
+
+  return (
+    <dialog ref={dialog} aria-labelledby="ai-settings-heading" className="panel ai-settings-dialog" onClose={onClose}>
+      <header className="dialog-header flex items-center justify-between gap-2 px-4 py-3">
+        <h2 id="ai-settings-heading" className="section-title">
+          <KeyRound size={16} aria-hidden="true" className="text-[var(--accent)]" /> Cài đặt Gemini AI
+        </h2>
+        <button type="button" className="button icon-button" aria-label="Đóng cài đặt Gemini"
+          onClick={() => dialog.current?.close()}>
+          <X size={16} aria-hidden="true" />
+        </button>
+      </header>
+      <div className="space-y-3 p-4">
+        <div className={`notice ${configured ? "success" : "warning"} flex flex-wrap items-center justify-between gap-2`}>
+          <div>
+            <p className="font-semibold">
+              {loading && !aiStatus ? "Đang kiểm tra trạng thái Gemini…"
+                : configured ? "Gemini: Sẵn sàng" : "Gemini: Chưa cấu hình key"}
+            </p>
+            <p className="helper mt-0.5">
+              Model dự kiến: <code className="font-mono text-zinc-200">{aiStatus?.model ?? "gemini-3.6-flash"}</code>
+            </p>
+          </div>
+          <button type="button" className="button" disabled={loading} onClick={onRefreshStatus}>
+            <RefreshCw size={13} className={loading ? "busy-icon" : undefined} aria-hidden="true" /> Kiểm tra lại
+          </button>
+        </div>
+
+        <div className="notice space-y-1.5">
+          <p className="font-medium text-zinc-200">Cách cấu hình lâu dài trên máy chủ (.env)</p>
+          <p className="helper">Tạo hoặc mở tệp <code className="font-mono">.env</code> ở thư mục gốc dự án và thêm:</p>
+          <pre className="overflow-x-auto rounded border border-zinc-800 bg-zinc-950/70 p-2 font-mono text-xs text-zinc-200">
+{`GEMINI_API_KEY = your_api_key_here
+GEMINI_DRAFT_MODEL = gemini-3.6-flash`}
+          </pre>
+        </div>
+
+        <form className="section-rule space-y-2.5" onSubmit={(event) => {
+          event.preventDefault();
+          onSaveSessionKey(draftKey.trim());
+        }}>
+          <label className="field">Khóa Gemini tạm theo phiên (chỉ giữ trong RAM tab này)
+            <input type="password" autoComplete="off" className="control w-full font-mono"
+              placeholder="Nhập GEMINI_API_KEY tạm nếu chưa cấu hình .env"
+              value={draftKey} onChange={(event) => setDraftKey(event.target.value)} />
+          </label>
+          <p className="helper">
+            Khóa tạm chỉ nằm trong bộ nhớ tab trình duyệt hiện tại để gửi qua header bảo mật khi gọi API, không lưu xuống localStorage, JSON hay log.
+          </p>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {sessionApiKey && (
+              <button type="button" className="button mr-auto text-rose-300" onClick={() => {
+                setDraftKey("");
+                onSaveSessionKey("");
+              }}>Xóa khóa phiên</button>
+            )}
+            <button type="button" className="button" onClick={() => dialog.current?.close()}>Đóng</button>
+            <button type="submit" className="button primary" disabled={!draftKey.trim()}>Dùng cho phiên này</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+  );
+}
+
 export default function App() {
   const [restored] = useState(() => loadStoredWorkspace());
   const [project, setProject] = useState<ProjectState>(() => restored
@@ -204,6 +299,19 @@ export default function App() {
   const [quickStartCollapsed, setQuickStartCollapsed] = useState(() => loadQuickStartCollapsed());
   const [renamingProject, setRenamingProject] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState("");
+  const [sessionApiKey, setSessionApiKey] = useState("");
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [aiStatusLoading, setAiStatusLoading] = useState(true);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const latestSessionKey = useRef(sessionApiKey);
+  useLayoutEffect(() => { latestSessionKey.current = sessionApiKey; }, [sessionApiKey]);
+  const apiPost = useCallback(<T,>(path: string, body: unknown, signal?: AbortSignal) => (
+    post<T>(path, body, signal, latestSessionKey.current)
+  ), []);
+  const appHelpApi = useMemo<HelpApi>(() => ({
+    topics: (ws, signal) => request(`/api/help/topics?workspace=${ws}`, { signal }, latestSessionKey.current),
+    ask: (ws, question, signal) => post("/api/help/ask", { workspace: ws, question }, signal, latestSessionKey.current),
+  }), []);
   const importInputRef = useRef<HTMLInputElement>(null);
   const readyDemos = readyDemoPresets();
   const activeRequest = useRef<AbortController | null>(null);
@@ -214,17 +322,23 @@ export default function App() {
   const applyBlocked = planningApplyBlock(ir.tasks.length, plans, !!asOfInput || entries.size > 0, !!phase || editing !== null);
   const latestApplyBlock = useRef(applyBlocked);
   useLayoutEffect(() => { latestApplyBlock.current = applyBlocked; }, [applyBlocked]);
-  const assistant = usePlanningAssistant(post, () => ({
+  const assistant = usePlanningAssistant(apiPost, () => ({
     version: editVersion.current,
     blocked: latestApplyBlock.current || (activeRequest.current
       ? "Hãy hoàn tất thao tác dự án đang chạy trước khi áp dụng bản nháp." : ""),
   }), (confirmed) => {
     const conflict = confirmed.tasks.find(({ id }) => usedTaskIds.has(id));
     if (conflict) throw new Error(`Mã ${conflict.id} đã từng được dùng trong dự án. Hãy đổi mã trong bản nháp rồi áp dụng lại.`);
-    changeProject((current) => ({ ...confirmed, members: current.members }));
+    changeProject((current) => mergeConfirmedMembers(current.members ?? [], confirmed));
     setSelectedPreset("");
     setHasPlanningResult(false);
-    setFeedback({ message: "Đã áp dụng bản nháp. Chọn người phụ trách cho từng công việc.", errors: [] });
+    const memberCount = confirmed.members?.length ?? 0;
+    setFeedback({
+      message: memberCount
+        ? `Đã áp dụng bản nháp cùng ${memberCount} thành viên gợi ý. Kiểm tra lại phân công trước khi tính lịch.`
+        : "Đã áp dụng bản nháp. Chọn người phụ trách cho từng công việc.",
+      errors: [],
+    });
     goTo("planning");
   });
   const previousAssistantStep = useRef(assistant.step);
@@ -297,6 +411,24 @@ export default function App() {
       .catch((error) => { if (!controller.signal.aborted) setPresetError(errorMessage(error)); });
     return () => controller.abort();
   }, [presetRequest]);
+
+  const refreshAiStatus = useCallback((overrideKey?: string) => {
+    setAiStatusLoading(true);
+    request<AiStatus>("/api/ai/status", undefined, overrideKey ?? latestSessionKey.current)
+      .then((data) => setAiStatus(data))
+      .catch(() => setAiStatus(null))
+      .finally(() => setAiStatusLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setAiStatusLoading(true);
+    request<AiStatus>("/api/ai/status", { signal: controller.signal }, latestSessionKey.current)
+      .then((data) => { if (!controller.signal.aborted) setAiStatus(data); })
+      .catch(() => { if (!controller.signal.aborted) setAiStatus(null); })
+      .finally(() => { if (!controller.signal.aborted) setAiStatusLoading(false); });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => () => {
     activeRequest.current?.abort();
@@ -747,7 +879,7 @@ export default function App() {
     const context = recoveryContext(plans, instance);
     const explain = context ? (
       workspace === (fromProgress ? "recovery" : "planning") &&
-      <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} />
+      <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} sessionApiKey={sessionApiKey} />
     ) : <p className="helper">Cần có dữ liệu lịch đầy đủ để giải thích đề xuất. Hãy tính lại lịch.</p>;
     return (
       <section id="schedule-proposal" tabIndex={-1} className="panel proposal grid-cols-[minmax(0,1fr)] result-enter" aria-labelledby="proposal-heading">
@@ -802,6 +934,10 @@ export default function App() {
     </div>
   );
   const setupReady = ir.tasks.length > 0 && members.length > 0 && !!calendar.project_start_date && !dateErrors.length;
+  const geminiConfigured = Boolean(aiStatus?.configured || sessionApiKey.trim());
+  const aiStatusText = aiStatusLoading && !aiStatus
+    ? "Gemini: Đang kiểm tra…"
+    : geminiConfigured ? "Gemini: Sẵn sàng" : "Gemini: Chưa cấu hình key";
   const stepDone: Record<Workspace, boolean> = {
     setup: setupReady,
     planning: accepted !== null,
@@ -881,6 +1017,12 @@ export default function App() {
                 <input ref={importInputRef} type="file" accept=".json,application/json" className="sr-only"
                   aria-label="Chọn tệp dự án JSON" onChange={(event) => void importProjectFile(event)} />
               </div>
+              <button type="button" className="button ai-status-btn" aria-haspopup="dialog"
+                title={aiStatus?.model ? `Model: ${aiStatus.model} · Bấm để xem hoặc nhập khóa tạm` : "Xem trạng thái Gemini API"}
+                onClick={() => setAiSettingsOpen(true)}>
+                <span className={`ai-status-dot ${geminiConfigured ? "is-ready" : "is-missing"}`} aria-hidden="true" />
+                {aiStatusText}
+              </button>
               <HelpButton />
             </div>
           </div>
@@ -1006,7 +1148,9 @@ export default function App() {
                     }}>Tải lại kịch bản</button>
                   </div>
                 )}
-                {assistant.step !== "review" && <PlanningInput assistant={assistant} />}
+                {assistant.step !== "review" && (
+                  <PlanningInput assistant={assistant} applyBlocked={applyBlocked} onResetProject={resetProject} />
+                )}
               </section>
               <div className="setup-details">
                 <section aria-labelledby="calendar-heading">
@@ -1139,7 +1283,7 @@ export default function App() {
                       <h4 id="accepted-heading" className="text-sm font-semibold">Lịch đang áp dụng</h4>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={`badge ${outdated || acceptedAssessment?.daysLate ? "badge-warning" : "badge-success"}`}>{outdated ? "Cần cập nhật" : "Đã chấp nhận"}</span>
-                        {acceptedContext && <RecoveryAssistant key={acceptedContext.key} context={acceptedContext} baseUrl={API_BASE} />}
+                        {acceptedContext && <RecoveryAssistant key={acceptedContext.key} context={acceptedContext} baseUrl={API_BASE} sessionApiKey={sessionApiKey} />}
                       </div>
                     </div>
                     {!!acceptedAssessment?.daysLate && <DeadlineWarning assessment={acceptedAssessment} accepted onRevise={revisePlan} />}
@@ -1192,7 +1336,7 @@ export default function App() {
                 <div className="flex flex-wrap items-center gap-3">
                   {workspace === "recovery" && accepted && proposal?.source !== "progress" && !comparisonPair({ ...plans, proposal: null }) && (() => {
                     const singleAcceptedContext = acceptedRecoveryContext(plans, instance);
-                    return singleAcceptedContext && <RecoveryAssistant key={singleAcceptedContext.key} context={singleAcceptedContext} baseUrl={API_BASE} />;
+                    return singleAcceptedContext && <RecoveryAssistant key={singleAcceptedContext.key} context={singleAcceptedContext} baseUrl={API_BASE} sessionApiKey={sessionApiKey} />;
                   })()}
                   {accepted && <button className="text-link" onClick={() => goTo("planning", "schedule-heading")}>Xem lịch đang áp dụng</button>}
                 </div>
@@ -1203,7 +1347,7 @@ export default function App() {
                   historyExplanation={(reference) => {
                     if (workspace !== "recovery") return null;
                     const context = acceptedRecoveryContext(plans, instance, reference);
-                    return context && <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} />;
+                    return context && <RecoveryAssistant key={context.key} context={context} baseUrl={API_BASE} sessionApiKey={sessionApiKey} />;
                   }} />
               )}
             </section>
@@ -1216,8 +1360,21 @@ export default function App() {
           onRemove={typeof editing === "number" && !protectTaskIdentity(editedTask) ? () => removeTask(editing) : undefined}
           onClose={() => setEditing(null)} />
       )}
+      {aiSettingsOpen && (
+        <AiSettingsDialog
+          aiStatus={aiStatus}
+          loading={aiStatusLoading}
+          sessionApiKey={sessionApiKey}
+          onSaveSessionKey={(nextKey) => {
+            setSessionApiKey(nextKey);
+            refreshAiStatus(nextKey);
+          }}
+          onRefreshStatus={() => refreshAiStatus()}
+          onClose={() => setAiSettingsOpen(false)}
+        />
+      )}
     </div>
   );
   // Help fields are siblings of the project edit-capture boundary, even when launched from a task dialog.
-  return <ApplicationGuide workspace={workspace} api={helpApi}>{projectView}</ApplicationGuide>;
+  return <ApplicationGuide workspace={workspace} api={appHelpApi}>{projectView}</ApplicationGuide>;
 }

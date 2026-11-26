@@ -82,6 +82,7 @@ function prepareRecoveryScenario() {
     const path = new URL(url).pathname;
     const payload = options?.body && JSON.parse(options.body);
     if (path === "/api/presets") return json({ Mẫu: preset, Khác: { ...preset, project_name: "Dự án khác" } });
+    if (path === "/api/ai/status") return json({ configured: false, model: "gemini-3.6-flash" });
     if (path === "/api/validate" || path === "/api/reschedule/validate") return json({ valid: true, errors: [] });
     if (["/api/solve", "/api/reschedule"].includes(path)) {
       schedules.push(payload);

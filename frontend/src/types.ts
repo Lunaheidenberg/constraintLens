@@ -211,6 +211,11 @@ export interface ParseRequest {
 
 export type DraftReview = "provided" | "suggested" | "missing" | "confirmed";
 
+export interface AiStatus {
+  configured: boolean;
+  model: string;
+}
+
 export interface DraftTask {
   id: string;
   name: string;
@@ -219,10 +224,13 @@ export interface DraftTask {
   dependencies: string[] | null;
   duration_review: DraftReview;
   dependency_review: DraftReview;
+  suggested_assignee_id?: string | null;
+  assignee_review?: DraftReview | null;
 }
 
 export interface ProjectDraft {
   project_name: string;
+  members?: ProjectMember[];
   tasks: DraftTask[];
 }
 
@@ -248,6 +256,7 @@ export interface PlanningTaskSources {
   category: PlanningSource;
   duration: PlanningSource;
   dependencies: PlanningSource;
+  assignee?: PlanningSource | null;
 }
 
 export interface PlanningDraftResult {

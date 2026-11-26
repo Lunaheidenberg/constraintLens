@@ -62,6 +62,7 @@ function prepareBrowserScenario() {
     const payload = options?.body && JSON.parse(options.body);
     calls.push({ path, payload });
     if (path === "/api/presets") return json({});
+    if (path === "/api/ai/status") return json({ configured: true, model: "gemini-3.6-flash" });
     if (path === "/api/help/topics") return json(helpTopics(searchParams.get("workspace")));
     if (path === "/api/help/ask") {
       if (payload.question === "Lỗi kết nối") return json({}, 503);
@@ -285,6 +286,8 @@ function prepareBrowserScenario() {
     check(calls.slice(callsBeforeManual).every(({ path }) => path.startsWith("/api/help/")), "Manual entry depended on Gemini");
 
     await click("Thiết lập");
+    await waitFor(() => find("#planning-apply-blocked")?.textContent.includes("chưa có công việc"), "Early apply-blocked notice missing");
+    check(find(".ai-status-btn")?.textContent.includes("Gemini: Sẵn sàng"), "Gemini status badge missing");
     await describe("Thử lại khi cần giữ dự án hiện tại.");
     await click("Bỏ qua tất cả");
     await waitFor(() => finishDraftFailure && button("Đang tạo bản nháp…")?.disabled, "Request against active project was not pending");

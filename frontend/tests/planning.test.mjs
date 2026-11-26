@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { draftReady, draftTaskForEditor, generateProjectDraft } from "../src/draft.ts";
 import {
   cancelPlanningRequest, confirmDraftSuggestions, confirmPlanningDraft, editPlanningTask,
-  hasDraftSuggestions, planningApi, planningApplyBlock, removePlanningTask,
+  hasDraftSuggestions, mergeConfirmedMembers, planningApi, planningApplyBlock, removePlanningTask,
+  updateDraftMembers,
 } from "../src/planning.ts";
 import { initialPlans } from "../src/plans.ts";
 
@@ -230,4 +231,52 @@ test("a project edit or new progress arriving during validation prevents applica
     assert.equal(updates.ready.mock.callCount(), 0);
     assert.equal(updates.failed.mock.callCount(), 1);
   }
+});
+
+test("suggested draft members and assignments require confirmation and merge cleanly", () => {
+  const memberDraft = {
+    goal: "Lập lịch nhóm",
+    assumptions: [],
+    uncertainties: [],
+    draft: {
+      project_name: "Web nhóm",
+      members: [{ id: "M1", name: "An" }, { id: "M2", name: "Bình" }],
+      tasks: [{
+        id: "T1", name: "Thiết kế", category: "Design", duration: 2, dependencies: [],
+        duration_review: "provided", dependency_review: "provided",
+        suggested_assignee_id: "M1", assignee_review: "suggested",
+      }],
+    },
+    sources: {
+      goal: { kind: "description" },
+      project_name: ai,
+      tasks: { T1: { ...source, duration: { kind: "description" }, dependencies: { kind: "description" }, assignee: ai } },
+    },
+  };
+  assert.equal(hasDraftSuggestions(memberDraft.draft), true);
+  assert.equal(draftReady(memberDraft.draft), false);
+
+  const reviewed = confirmDraftSuggestions(memberDraft.draft);
+  assert.equal(reviewed.tasks[0].assignee_review, "confirmed");
+  assert.equal(draftReady(reviewed), true);
+
+  const memberRemoved = updateDraftMembers(memberDraft, [{ id: "M2", name: "Bình" }]);
+  assert.equal(memberRemoved.draft.tasks[0].suggested_assignee_id, null);
+  assert.equal(memberRemoved.draft.tasks[0].assignee_review, null);
+  assert.equal(draftReady(memberRemoved.draft), true);
+
+  const merged = mergeConfirmedMembers(
+    [{ id: "member-1", name: "An" }],
+    {
+      ...confirmedProject,
+      members: [{ id: "M1", name: "An" }, { id: "M2", name: "Chi" }],
+      tasks: [
+        { ...confirmedProject.tasks[0], assignee_id: "M1" },
+        { ...confirmedProject.tasks[1], assignee_id: "M2" },
+      ],
+    },
+  );
+  assert.deepEqual(merged.members, [{ id: "member-1", name: "An" }, { id: "M2", name: "Chi" }]);
+  assert.equal(merged.tasks[0].assignee_id, "member-1");
+  assert.equal(merged.tasks[1].assignee_id, "M2");
 });

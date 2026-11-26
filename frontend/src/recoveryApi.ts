@@ -115,11 +115,20 @@ function isRecoveryResponse(value: unknown): value is RecoveryResponse {
     oneOf(value.ai_status, AI_STATUSES);
 }
 
-export async function explainRecovery(baseUrl: string, payload: RecoveryRequest, signal: AbortSignal): Promise<RecoveryResponse> {
+export async function explainRecovery(
+  baseUrl: string,
+  payload: RecoveryRequest,
+  signal: AbortSignal,
+  sessionApiKey?: string,
+): Promise<RecoveryResponse> {
   let response: Response;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (sessionApiKey?.trim()) {
+    headers["X-Gemini-Api-Key"] = sessionApiKey.trim();
+  }
   try {
     response = await fetch(`${baseUrl}/api/recovery/explain`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal,
+      method: "POST", headers, body: JSON.stringify(payload), signal,
     });
   } catch (error) {
     if (signal.aborted) throw error;

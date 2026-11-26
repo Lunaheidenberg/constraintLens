@@ -34,21 +34,29 @@ export function draftTaskForEditor(task: DraftTask): EditableTask {
   return {
     id: task.id, name: task.name, category: task.category, kanban_stage: task.category,
     duration: task.duration, dependencies: task.dependencies ?? [],
+    assignee_id: task.suggested_assignee_id ?? null,
   };
 }
 
 export function draftReady({ tasks }: ProjectDraft) {
   return tasks.length > 0 && tasks.every((task) =>
     task.duration !== null && (task.duration_review === "provided" || task.duration_review === "confirmed") &&
-    task.dependencies !== null && (task.dependency_review === "provided" || task.dependency_review === "confirmed"));
+    task.dependencies !== null && (task.dependency_review === "provided" || task.dependency_review === "confirmed") &&
+    (task.suggested_assignee_id == null || task.assignee_review === "provided" || task.assignee_review === "confirmed"));
 }
 
 export function saveDraftTask(
   draft: ProjectDraft, original: DraftTask, edited: EditableTask,
-  review: { duration: boolean; dependencies: boolean },
+  review: { duration: boolean; dependencies: boolean; assignee?: boolean },
 ): ProjectDraft {
   const dependenciesChanged = JSON.stringify(edited.dependencies) !== JSON.stringify(original.dependencies ?? []);
   const dependenciesReviewed = review.dependencies || dependenciesChanged;
+  const nextAssignee = edited.assignee_id === undefined ? (original.suggested_assignee_id ?? null) : (edited.assignee_id ?? null);
+  const prevAssignee = original.suggested_assignee_id ?? null;
+  const assigneeChanged = nextAssignee !== prevAssignee;
+  const nextAssigneeReview = nextAssignee === null ? null
+    : assigneeChanged || review.assignee ? "confirmed"
+    : (original.assignee_review ?? null);
   const updated: DraftTask = {
     ...original, id: edited.id, name: edited.name, category: edited.category ?? edited.kanban_stage,
     duration: edited.duration,
@@ -56,6 +64,9 @@ export function saveDraftTask(
       : edited.duration !== original.duration || review.duration ? "confirmed" : original.duration_review,
     dependencies: dependenciesReviewed ? edited.dependencies : original.dependencies,
     dependency_review: dependenciesReviewed ? "confirmed" : original.dependency_review,
+    ...(nextAssignee !== null || original.suggested_assignee_id !== undefined
+      ? { suggested_assignee_id: nextAssignee, assignee_review: nextAssigneeReview }
+      : {}),
   };
   if (!draft.tasks.includes(original)) return { ...draft, tasks: [...draft.tasks, updated] };
   const tasks = draft.tasks.map((task) => {

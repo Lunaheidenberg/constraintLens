@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, field_validator
 
-from project_draft import DraftModel, ExtractedTask, Label, ProjectDraft, TaskID
+from project_draft import DraftMember, DraftModel, ExtractedTask, Label, ProjectDraft, TaskID
 
 
 QuestionID = Literal["Q1", "Q2", "Q3"]
@@ -62,6 +62,8 @@ class GeminiClarification(DraftModel):
 class PlannedTask(ExtractedTask):
     name_quote: Quote | None = None
     category_quote: Quote | None = None
+    suggested_assignee_id: TaskID | None = None
+    assignee_quote: Quote | None = None
 
 
 class GeminiPlan(DraftModel):
@@ -69,6 +71,7 @@ class GeminiPlan(DraftModel):
     goal_quote: Quote | None = None
     project_name: Label
     project_name_quote: Quote | None = None
+    members: list[DraftMember] = Field(default_factory=list, max_length=50)
     tasks: list[PlannedTask] = Field(min_length=1, max_length=100)
     assumptions: list[Label] = Field(max_length=12)
     uncertainties: list[Label] = Field(max_length=12)
@@ -84,6 +87,7 @@ class TaskSources(DraftModel):
     category: FieldSource
     duration: FieldSource
     dependencies: FieldSource
+    assignee: FieldSource | None = None
 
 
 class PlanningSources(DraftModel):

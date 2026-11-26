@@ -24,6 +24,7 @@ function prepareTaskIdentityScenario() {
     if (path === "/api/presets") return json({
       Bookstore: preset, Other: { ...preset, project_name: "Other" }, Empty: { ...preset, project_name: "Empty", tasks: [] },
     });
+    if (path === "/api/ai/status") return json({ configured: true, model: "gemini-3.6-flash" });
     if (path === "/api/validate") return json({ valid: true, errors: [] });
     if (path === "/api/solve") {
       solved.push(body);

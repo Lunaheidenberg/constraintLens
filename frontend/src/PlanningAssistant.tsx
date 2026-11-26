@@ -115,7 +115,11 @@ export function usePlanningAssistant(
   };
 }
 
-export function PlanningInput({ assistant }: { assistant: ReturnType<typeof usePlanningAssistant> }) {
+export function PlanningInput({ assistant, applyBlocked = "", onResetProject }: {
+  assistant: ReturnType<typeof usePlanningAssistant>;
+  applyBlocked?: string;
+  onResetProject?: () => void;
+}) {
   const { step, phase, error, session } = assistant;
   const asking = step === "clarify" && session;
   return (
@@ -154,6 +158,14 @@ export function PlanningInput({ assistant }: { assistant: ReturnType<typeof useP
               }} />
           </label>
           <p id="description-help" className="helper">Viết 1–3 câu về mục tiêu và kết quả bạn muốn đạt được.</p>
+          {applyBlocked && (
+            <div id="planning-apply-blocked" className="notice warning flex flex-wrap items-center justify-between gap-2" role="status">
+              <p>Dự án hiện đang có dữ liệu ({applyBlocked})</p>
+              {onResetProject && (
+                <button type="button" className="button" onClick={onResetProject}>Tạo dự án mới</button>
+              )}
+            </div>
+          )}
         </>
       )}
       <div className="setup-draft-actions">

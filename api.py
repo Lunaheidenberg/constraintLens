@@ -15,6 +15,7 @@ Cung cấp các API:
 """
 
 import os
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Optional
 
@@ -53,30 +54,75 @@ app.add_middleware(
 
 
 # =============================================================================
-# HELPER: NẠP GEMINI API KEY
+# HELPER: NẠP GEMINI API KEY & CẤU HÌNH .ENV LINH HOẠT
 # =============================================================================
-def _get_gemini_api_key(provided_key: Optional[str] = None) -> str:
+_SESSION_GEMINI_KEY: ContextVar[str] = ContextVar("session_gemini_key", default="")
+
+
+@app.middleware("http")
+async def _attach_session_gemini_key(request: Request, call_next):
+    session_key = request.headers.get("x-gemini-api-key", "").strip()
+    token = _SESSION_GEMINI_KEY.set(session_key)
+    try:
+        return await call_next(request)
+    finally:
+        _SESSION_GEMINI_KEY.reset(token)
+
+
+def _load_dotenv_file(env_path: Path = Path(".env")) -> dict[str, str]:
+    """Đọc các cặp KEY=VALUE từ .env, bỏ khoảng trắng quanh dấu '=' và dấu ngoặc."""
+    values: dict[str, str] = {}
+    if not env_path.exists():
+        return values
+    with open(env_path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+                if "=" not in line:
+                    continue
+            raw_key, raw_val = line.split("=", 1)
+            key = raw_key.strip()
+            val = raw_val.strip()
+            if len(val) >= 2 and ((val[0] == '"' and val[-1] == '"') or (val[0] == "'" and val[-1] == "'")):
+                val = val[1:-1]
+            if key:
+                values[key] = val
+    return values
+
+
+def _get_gemini_api_key(provided_key: Optional[str] = None, env_path: Path = Path(".env")) -> str:
     """Đọc GEMINI_API_KEY từ tham số, biến môi trường hoặc file .env."""
     if provided_key and provided_key.strip():
         return provided_key.strip()
 
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
-        env_path = Path(".env")
-        if env_path.exists():
-            with open(env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("GEMINI_API_KEY="):
-                        val = line.split("=", 1)[1].strip()
-                        if (val.startswith('"') and val.endswith('"')) or (
-                            val.startswith("'") and val.endswith("'")
-                        ):
-                            val = val[1:-1]
-                        key = val
-                        os.environ["GEMINI_API_KEY"] = key
-                        break
+        dotenv_val = _load_dotenv_file(env_path).get("GEMINI_API_KEY", "").strip()
+        if dotenv_val:
+            key = dotenv_val
+            os.environ["GEMINI_API_KEY"] = key
     return key
+
+
+def _effective_gemini_api_key(provided_key: Optional[str] = None) -> str:
+    """Ưu tiên khóa tạm theo phiên trong header X-Gemini-Api-Key (chỉ trong RAM của request)."""
+    if provided_key and provided_key.strip():
+        return provided_key.strip()
+    session_key = _SESSION_GEMINI_KEY.get().strip()
+    if session_key:
+        return session_key
+    return _get_gemini_api_key()
+
+
+def _get_gemini_model(env_path: Path = Path(".env")) -> str:
+    """Đọc GEMINI_DRAFT_MODEL từ biến môi trường hoặc file .env, fallback về model mặc định."""
+    if "GEMINI_DRAFT_MODEL" in os.environ:
+        return _draft_model()
+    dotenv_model = _load_dotenv_file(env_path).get("GEMINI_DRAFT_MODEL", "").strip().removeprefix("models/")
+    return dotenv_model or _draft_model()
 
 
 # =============================================================================
@@ -164,6 +210,11 @@ class DraftRequest(BaseModel):
     prompt: str
 
 
+class AiStatusResponse(BaseModel):
+    configured: bool = Field(description="True nếu máy chủ đã có khóa Gemini hoặc phiên gửi kèm khóa hợp lệ.")
+    model: str = Field(description="Tên model Gemini mặc định cho lập kế hoạch và trợ lý.")
+
+
 class ValidateResponse(BaseModel):
     valid: bool = Field(description="True nếu không có lỗi, False nếu có lỗi logic hoặc DAG cycle.")
     errors: list[str] = Field(description="Danh sách thông báo lỗi bằng tiếng Việt.")
@@ -229,12 +280,21 @@ def get_presets():
     return DEMO_SCENARIOS
 
 
+@app.get("/api/ai/status", response_model=AiStatusResponse)
+def get_ai_status():
+    """Trả về trạng thái sẵn sàng của Gemini API và model đang dùng (không bao giờ trả về khóa)."""
+    return AiStatusResponse(
+        configured=bool(_effective_gemini_api_key()),
+        model=_get_gemini_model(),
+    )
+
+
 @app.post("/api/parse", response_model=SchedulingIR)
 def parse_prompt(payload: ParseRequest):
     """
     Phân tích văn bản tự do bằng Gemini Flash để trích xuất cấu trúc SchedulingIR.
     """
-    api_key = _get_gemini_api_key(payload.api_key)
+    api_key = _effective_gemini_api_key(payload.api_key)
     if not api_key:
         raise HTTPException(
             status_code=400,
@@ -261,7 +321,7 @@ def generate_draft(payload: DraftRequest):
     if not prompt or len(prompt) > 12_000:
         raise HTTPException(status_code=400, detail="Nhập mô tả dự án từ 1 đến 12.000 ký tự.")
     try:
-        return parse_project_draft(prompt, _get_gemini_api_key())
+        return parse_project_draft(prompt, _effective_gemini_api_key(), model=_get_gemini_model())
     except GeminiDraftError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from None
     except OSError:
@@ -299,17 +359,17 @@ planning_router = APIRouter(prefix="/api/planning", route_class=PlanningRoute)
 
 @planning_router.post("/clarify", response_model=ClarificationResult)
 async def clarify_planning(payload: ClarifyPlanningRequest):
-    return await clarify_project(payload.prompt, _get_gemini_api_key())
+    return await clarify_project(payload.prompt, _effective_gemini_api_key(), model=_get_gemini_model())
 
 
 @planning_router.post("/draft", response_model=PlanningResult)
 async def generate_planning_draft(payload: GeneratePlanningRequest):
-    return await propose_project_plan(payload, _get_gemini_api_key())
+    return await propose_project_plan(payload, _effective_gemini_api_key(), model=_get_gemini_model())
 
 
 app.include_router(planning_router)
-app.include_router(create_help_router(lambda: _get_gemini_api_key(), _draft_model))
-app.include_router(create_recovery_router(lambda: _get_gemini_api_key(), _draft_model))
+app.include_router(create_help_router(_effective_gemini_api_key, _get_gemini_model))
+app.include_router(create_recovery_router(_effective_gemini_api_key, _get_gemini_model))
 
 
 @app.post("/api/validate", response_model=ValidateResponse)

@@ -545,10 +545,10 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
   task: T;
   tasks: T[];
   members?: ProjectMember[];
-  draftReview?: { duration: boolean; dependencies: boolean };
+  draftReview?: { duration: boolean; dependencies: boolean; assignee?: boolean };
   planningOnly?: boolean;
   lockId?: boolean;
-  onSave: (updated: T, review: { duration: boolean; dependencies: boolean }) => string | void;
+  onSave: (updated: T, review: { duration: boolean; dependencies: boolean; assignee?: boolean }) => string | void;
   onRemove?: () => void;
   onClose: () => void;
 }) {
@@ -557,6 +557,7 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
   const [duration, setDuration] = useState(task.duration === null ? "" : String(task.duration));
   const [durationReviewed, setDurationReviewed] = useState(false);
   const [dependenciesReviewed, setDependenciesReviewed] = useState(false);
+  const [assigneeReviewed, setAssigneeReviewed] = useState(false);
   const [error, setError] = useState<{ field: "name" | "id" | "category" | "duration"; message: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const dependencies = new Map(tasks.filter((item) => item !== task).map((item) => [item.id, item.name]));
@@ -601,7 +602,10 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
       invalid("duration", "Thời lượng phải là số nguyên dương tính theo ngày.");
       return;
     }
-    const idError = onSave({ ...fields, id, name, category, duration: days }, { duration: durationReviewed, dependencies: dependenciesReviewed });
+    const idError = onSave(
+      { ...fields, id, name, category, duration: days },
+      { duration: durationReviewed, dependencies: dependenciesReviewed, assignee: assigneeReviewed },
+    );
     if (idError) return invalid("id", idError);
     dialog.current?.close();
   }
@@ -651,6 +655,18 @@ export function TaskDialog<T extends EditableTask>({ task, tasks, members = [], 
             {!planningOnly && <label className="field">Trạng thái
               <StatusSelect task={fields} onChange={(status) => setFields({ ...fields, status })} />
             </label>}
+          </fieldset>}
+          {draftReview && members.length > 0 && <fieldset className="section-rule space-y-2">
+            <legend className="eyebrow pr-2">Phân công gợi ý</legend>
+            <label className="field">Người phụ trách
+              <AssigneeSelect members={members} task={fields} onChange={(id) => setFields({ ...fields, assignee_id: id })} />
+            </label>
+            {draftReview.assignee && (fields.assignee_id ?? null) === (task.assignee_id ?? null) && fields.assignee_id != null && (
+              <label className="flex items-center gap-2 text-xs text-amber-200">
+                <input type="checkbox" checked={assigneeReviewed} onChange={(event) => setAssigneeReviewed(event.target.checked)} />
+                Xác nhận phân công gợi ý này
+              </label>
+            )}
           </fieldset>}
           <fieldset className="section-rule">
             <legend className="eyebrow pr-2">Công việc tiên quyết</legend>

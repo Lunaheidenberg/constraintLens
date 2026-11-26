@@ -438,6 +438,28 @@
   .dialog-header { top: 0; border-bottom: 1px solid var(--line); }
   .dialog-footer { bottom: 0; border-top: 1px solid var(--line); }
   .button.guide-trigger { color: var(--accent); border-color: var(--accent-border); }
+  .ai-status-btn { font-size: 0.75rem; }
+  .ai-status-dot { width: 0.5rem; height: 0.5rem; flex: none; border-radius: 50%; }
+  .ai-status-dot.is-ready { background: var(--success); box-shadow: 0 0 0 3px rgb(140 229 191 / 0.16); }
+  .ai-status-dot.is-missing { background: var(--warning); box-shadow: 0 0 0 3px rgb(245 204 131 / 0.16); }
+  .ai-settings-dialog {
+    margin: auto;
+    max-height: calc(100dvh - 1.5rem);
+    width: min(32rem, calc(100% - 1.5rem));
+    overflow: auto;
+    color: var(--text);
+  }
+  .ai-settings-dialog::backdrop { background: rgb(5 7 12 / 0.72); }
+  .draft-member-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--panel);
+    font-size: 0.75rem;
+  }
   .guide-dialog {
     inset: 0.75rem 0.75rem auto auto;
     margin: 0;
