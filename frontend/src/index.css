@@ -353,9 +353,36 @@
   .kanban-column { min-height: 10rem; padding: 0.625rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--inset); }
   .kanban-column.is-over { border-color: var(--accent); background: var(--accent-soft); }
   .kanban-card { padding: 0.625rem 0.75rem; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--panel); }
+  .kanban-card.is-draggable { cursor: grab; }
+  .kanban-card.is-draggable:active { cursor: grabbing; }
   .kanban-card:hover, .kanban-card:focus-within { border-color: var(--line-strong); }
+  .kanban-dep-warning {
+    margin-top: 0.5rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--warning-border);
+    border-radius: var(--control-radius);
+    background: var(--warning-soft);
+    color: var(--warning);
+    font-size: 0.6875rem;
+    line-height: 1.35;
+  }
+  .progress-status-select { min-height: 1.875rem; width: 100%; font-size: 0.75rem; }
+  .progress-stepper { display: inline-flex; align-items: center; gap: 0.25rem; }
+  .progress-step-btn { width: 1.875rem; min-height: 1.875rem; border: 1px solid var(--line); }
+  .progress-quick-btn { display: inline-block; font-size: 0.75rem; }
   .move-select { min-height: 1.875rem; max-width: 100%; background: var(--panel); font-size: 0.75rem; }
   .proposal { display: grid; gap: 1rem; padding: 1rem; border-color: var(--accent-border); }
+  .proposal-sticky-bar {
+    position: sticky;
+    top: 0;
+    z-index: 25;
+    margin: -1rem -1rem 0;
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid var(--line);
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    backdrop-filter: blur(6px);
+  }
   .metric-strip {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
     gap: 1px; overflow: hidden;

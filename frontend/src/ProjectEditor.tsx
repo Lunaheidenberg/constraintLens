@@ -153,6 +153,8 @@ export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskList
     setAnnouncement(`${task.id} đã chuyển sang ${status}.`);
   }
 
+  const taskStatusById = new Map(tasks.map((item) => [item.id, item.status ?? "To Do"]));
+
   return (
     <>
       <p className="sr-only" role="status">{announcement}</p>
@@ -192,17 +194,23 @@ export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskList
                   {columnTasks.map(({ task, index }) => {
                     const member = members.find((item) => item.id === task.assignee_id);
                     const locked = lockedTasks.has(task.id);
+                    const incompleteDeps = !locked && (status === "Doing" || status === "Done")
+                      ? task.dependencies.filter((depId) => taskStatusById.get(depId) !== "Done")
+                      : [];
                     return (
-                      <li key={`${task.id}-${index}`} className={`kanban-card ${dragging === index ? "opacity-50" : ""}`}>
+                      <li key={`${task.id}-${index}`} draggable={!locked}
+                        title={locked ? undefined : "Kéo thẻ sang cột khác để cập nhật trạng thái"}
+                        onDragStart={(event) => {
+                          if (locked) return;
+                          event.dataTransfer.setData("text/plain", task.id);
+                          event.dataTransfer.effectAllowed = "move";
+                          setDragging(index);
+                        }}
+                        onDragEnd={() => { setDragging(null); setOver(null); }}
+                        className={`kanban-card ${!locked ? "is-draggable" : ""} ${dragging === index ? "opacity-50" : ""}`}>
                         <div className="flex items-start gap-1.5">
-                          {!locked && <span draggable className="-ml-1 inline-grid h-6 w-5 shrink-0 cursor-grab place-items-center rounded text-zinc-400 hover:bg-white/5 active:cursor-grabbing" title="Kéo để chuyển trạng thái"
-                            onDragStart={(event) => {
-                              event.dataTransfer.setData("text/plain", task.id);
-                              event.dataTransfer.effectAllowed = "move";
-                              setDragging(index);
-                            }}
-                            onDragEnd={() => { setDragging(null); setOver(null); }}>
-                            <GripVertical size={15} className="pointer-events-none" aria-hidden="true" />
+                          {!locked && <span className="-ml-1 inline-grid h-6 w-5 shrink-0 place-items-center rounded text-zinc-400" aria-hidden="true">
+                            <GripVertical size={15} className="pointer-events-none" />
                           </span>}
                           {locked ? <span className="min-w-0 flex-1 break-words text-sm font-semibold leading-snug">{task.name}</span>
                             : <button className="min-w-0 flex-1 break-words rounded text-left text-sm font-semibold leading-snug hover:text-[var(--accent)]"
@@ -218,6 +226,11 @@ export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskList
                             </span>
                           )}
                         </div>
+                        {incompleteDeps.length > 0 && (
+                          <p className="kanban-dep-warning" role="status">
+                            Cần hoàn thành tiên quyết {incompleteDeps.join(", ")} trước
+                          </p>
+                        )}
                         <div className="mt-2 flex flex-wrap items-center justify-between gap-2" data-status-index={index}>
                           <span className={`inline-flex min-w-0 items-center gap-1.5 break-words text-xs ${member ? "text-zinc-300" : "text-amber-300"}`}>
                             <UserRound size={13} className="shrink-0" aria-hidden="true" />

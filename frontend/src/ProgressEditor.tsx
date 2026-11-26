@@ -4,7 +4,9 @@ import { DateField } from "./DateField";
 import type { Plan } from "./plans";
 import { parseRemainingDuration, plannedRemainingDays, remainingDurationDifference } from "./progressReport";
 import type { todoTasksDueForReview } from "./progressReview";
-import type { CompletedTask, ProjectCalendar, Task } from "./types";
+import type { CompletedTask, KanbanStatus, ProjectCalendar, Task } from "./types";
+
+const STATUS_OPTIONS: KanbanStatus[] = ["To Do", "Doing", "Done"];
 
 interface ProgressEditorProps {
   acceptedPlan: Plan | null;
@@ -28,6 +30,7 @@ interface ProgressEditorProps {
   onConfirmTodo: (confirmed: boolean) => void;
   onOpenKanban: () => void;
   onOpenPlanning: () => void;
+  onStatusChange: (index: number, status: KanbanStatus) => void;
   onDateChange: (date: string) => void;
   onEntryChange: (id: string, value: string) => void;
   onRequest: (solve: boolean) => void;
@@ -39,6 +42,8 @@ export function ProgressEditor(props: ProgressEditorProps) {
   const plannedDays = plannedRemainingDays(acceptedPlan, nextDate ? asOf : "");
   const replanning = phase === "rescheduling" || phase === "preparingRecovery";
   const needsReview = todoReview.length > 0 && !todoConfirmed;
+  const canUseReportDate = !!asOf && (!calendar.project_start_date || asOf >= calendar.project_start_date);
+  const reportDateDisplay = canUseReportDate ? formatDate(asOf) : "";
   return (
     <section className="panel section-pad space-y-3" aria-labelledby="progress-heading">
       <h3 id="progress-heading" tabIndex={-1} className="section-title">
@@ -58,7 +63,7 @@ export function ProgressEditor(props: ProgressEditorProps) {
           </div>}
           <div className="progress-dates">
             <DateField label="Tiến độ xác nhận đến hết ngày" value={asOfInput} min={minimumAsOf || undefined} max="9999-12-30"
-              onChange={props.onDateChange} describedBy="reporting-boundary" />
+              quickToday onChange={props.onDateChange} describedBy="reporting-boundary" />
             <div id="reporting-boundary" className="progress-boundary">
               <p className="helper">Bắt đầu lịch mới</p>
               <p className="font-medium tabular-nums">{nextDate ? formatDate(nextDate) : "Ngày kế tiếp ngày báo cáo"}</p>
@@ -66,11 +71,11 @@ export function ProgressEditor(props: ProgressEditorProps) {
           </div>
           <div className="helper">
             <p id="remaining-duration-help">Nhập tổng số ngày công việc còn cần để hoàn thành, không chỉ số ngày phát sinh thêm.</p>
-            <p>Số ngày được tính từ mốc bắt đầu lịch mới. Cột kế hoạch dùng lịch đã chấp nhận để tham chiếu.</p>
+            <p>Có thể đổi trạng thái trực tiếp tại cột Trạng thái và dùng nút điền nhanh bên cạnh.</p>
           </div>
           <div className="panel overflow-x-auto" role="region" aria-label="Tiến độ công việc" tabIndex={0}>
-            <table className="data-table w-full table-fixed text-left">
-              <colgroup><col /><col className="w-16 sm:w-24" /><col className="w-[23%]" /><col className="w-[29%]" /></colgroup>
+            <table className="data-table w-full min-w-[620px] table-fixed text-left">
+              <colgroup><col /><col className="w-24 sm:w-28" /><col className="w-[21%]" /><col className="w-[31%]" /></colgroup>
               <thead className="table-head border-b border-zinc-800">
                 <tr>
                   <th scope="col" className="p-2">Công việc</th>
@@ -80,7 +85,7 @@ export function ProgressEditor(props: ProgressEditorProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800">
-                {tasks.map((task) => {
+                {tasks.map((task, index) => {
                   const status = task.status ?? "To Do";
                   const confirmed = completed.get(task.id);
                   const value = entries.get(task.id) ?? "";
@@ -96,7 +101,14 @@ export function ProgressEditor(props: ProgressEditorProps) {
                         {status === "Doing" && <span className="helper mt-1 block font-normal">Ước tính ban đầu: {task.duration} ngày</span>}
                       </th>
                       <td className="p-2">
-                        <span className={`badge ${status === "Done" ? "badge-success" : status === "Doing" ? "badge-accent" : ""}`}>{status}</span>
+                        {confirmed ? (
+                          <span className="badge badge-success">Done</span>
+                        ) : (
+                          <select className="control progress-status-select" aria-label={`Trạng thái báo cáo của ${task.id}`}
+                            value={status} onChange={(event) => props.onStatusChange(index, event.target.value as KanbanStatus)}>
+                            {STATUS_OPTIONS.map((option) => <option key={option}>{option}</option>)}
+                          </select>
+                        )}
                       </td>
                       {status === "Doing" && !confirmed ? (
                         <>
@@ -105,11 +117,26 @@ export function ProgressEditor(props: ProgressEditorProps) {
                           </td>
                           <td className="break-words p-2">
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <input type="number" min={1} step={1} inputMode="numeric" className="control w-full max-w-24 tabular-nums"
-                                aria-label={`Số ngày thực tế còn lại của ${task.id}`} value={value}
-                                aria-invalid={invalid || undefined}
-                                aria-describedby={invalid ? `remaining-duration-help ${errorId}` : "remaining-duration-help"}
-                                onChange={(event) => props.onEntryChange(task.id, event.target.value)} />
+                              <div className="progress-stepper">
+                                <button type="button" className="button quiet icon-button progress-step-btn"
+                                  aria-label={`Giảm số ngày còn lại của ${task.id}`}
+                                  disabled={(actual ?? 1) <= 1}
+                                  onClick={() => props.onEntryChange(task.id, String(Math.max(1, (actual ?? planned ?? 2) - 1)))}>−</button>
+                                <input type="number" min={1} step={1} inputMode="numeric" className="control w-16 text-center tabular-nums"
+                                  aria-label={`Số ngày thực tế còn lại của ${task.id}`} value={value}
+                                  aria-invalid={invalid || undefined}
+                                  aria-describedby={invalid ? `remaining-duration-help ${errorId}` : "remaining-duration-help"}
+                                  onChange={(event) => props.onEntryChange(task.id, event.target.value)} />
+                                <button type="button" className="button quiet icon-button progress-step-btn"
+                                  aria-label={`Tăng số ngày còn lại của ${task.id}`}
+                                  onClick={() => props.onEntryChange(task.id, String((actual ?? planned ?? 0) + 1))}>+</button>
+                              </div>
+                              {planned !== undefined && planned >= 1 && actual !== planned && (
+                                <button type="button" className="text-link progress-quick-btn"
+                                  onClick={() => props.onEntryChange(task.id, String(planned))}>
+                                  Theo kế hoạch ({planned} ngày)
+                                </button>
+                              )}
                               {invalid && <p className="date-error" id={errorId}>Nhập số nguyên dương.</p>}
                               {difference !== null && (
                                 <span className={`badge ${difference > 0 ? "badge-warning" : difference < 0 ? "badge-success" : ""}`}>
@@ -122,10 +149,16 @@ export function ProgressEditor(props: ProgressEditorProps) {
                         </>
                       ) : <td colSpan={2} className="p-2">
                         {confirmed ? <span className="badge badge-success">Đã xác nhận · {formatDate(confirmed.actual_finish_date)}</span>
-                          : status === "Done" ? <div className="max-w-48">
+                          : status === "Done" ? <div className="max-w-52 space-y-1">
                             <DateField label={`Ngày hoàn thành thực tế của ${task.id}`}
                               min={calendar.project_start_date || undefined} max={asOf || undefined} value={value}
                               onChange={(value) => props.onEntryChange(task.id, value)} />
+                            {canUseReportDate && value.trim() !== reportDateDisplay && (
+                              <button type="button" className="text-link progress-quick-btn"
+                                onClick={() => props.onEntryChange(task.id, reportDateDisplay)}>
+                                Dùng ngày báo cáo ({reportDateDisplay})
+                              </button>
+                            )}
                           </div>
                           : <span className="text-zinc-400">{task.duration} ngày theo ước tính</span>}
                       </td>}
@@ -160,12 +193,12 @@ export function ProgressEditor(props: ProgressEditorProps) {
             </section>
           )}
           <div className="flex flex-wrap items-center gap-2">
-            <button className="button" disabled={!props.canRequest} onClick={() => props.onRequest(false)}>Kiểm tra tiến độ</button>
             <button className="button primary schedule-action" disabled={!props.canRequest || needsReview}
               aria-describedby={needsReview ? "progress-review-heading" : undefined} onClick={() => props.onRequest(true)}>
               {replanning && <LoaderCircle size={15} className="busy-icon" aria-hidden="true" />}
               {replanning ? props.pendingMessage : "Đề xuất lịch mới"}
             </button>
+            <button className="button quiet" disabled={!props.canRequest} onClick={() => props.onRequest(false)}>Kiểm tra tiến độ</button>
             {phase === "checkingProgress" && <span className="helper">{props.pendingMessage}</span>}
           </div>
           {props.projectNeedsCorrections && <p className="notice warning">Sửa các điều kiện trong mục <button className="underline" onClick={props.onOpenPlanning}>Lập lịch</button> trước khi gửi tiến độ.</p>}

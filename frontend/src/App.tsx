@@ -751,7 +751,7 @@ export default function App() {
     ) : <p className="helper">Cần có dữ liệu lịch đầy đủ để giải thích đề xuất. Hãy tính lại lịch.</p>;
     return (
       <section id="schedule-proposal" tabIndex={-1} className="panel proposal grid-cols-[minmax(0,1fr)] result-enter" aria-labelledby="proposal-heading">
-        <div className="section-bar">
+        <div className="section-bar proposal-sticky-bar">
           <div>
             <span className={`badge ${canAccept ? "badge-accent" : "badge-warning"}`}>{canAccept ? "Chờ chấp nhận" : "Chưa thể chấp nhận"}</span>
             <h4 id="proposal-heading" className="mt-2 text-base font-semibold">{accepted ? "Lịch mới đề xuất" : "Lịch ban đầu đề xuất"}</h4>
@@ -1174,6 +1174,7 @@ export default function App() {
               hasPendingEdits={planningNeedsReport} confirmedAsOf={confirmedAsOf}
               todoReview={todoReview} todoConfirmed={todoConfirmed} onOpenKanban={() => goTo("recovery", "kanban-heading")}
               onConfirmTodo={invalidateProposal}
+              onStatusChange={(index, status) => updateTask(index, { status }, false)}
               onDateChange={changeProgressDate}
               onEntryChange={changeProgressEntry}
               onRequest={(solve) => void requestRecovery(solve)} />
