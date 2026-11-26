@@ -153,6 +153,7 @@ export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskList
     setAnnouncement(`${task.id} đã chuyển sang ${status}.`);
   }
 
+  const taskById = new Map(tasks.map((item) => [item.id, item]));
   const taskStatusById = new Map(tasks.map((item) => [item.id, item.status ?? "To Do"]));
 
   return (
@@ -199,7 +200,6 @@ export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskList
                       : [];
                     return (
                       <li key={`${task.id}-${index}`} draggable={!locked}
-                        title={locked ? undefined : "Kéo thẻ sang cột khác để cập nhật trạng thái"}
                         onDragStart={(event) => {
                           if (locked) return;
                           event.dataTransfer.setData("text/plain", task.id);
@@ -221,9 +221,32 @@ export function Kanban({ tasks, members, lockedTasks, onEdit, onMove }: TaskList
                           <span className="badge">{taskCategory(task)}</span>
                           <span className="inline-flex items-center gap-1"><Clock3 size={13} aria-hidden="true" />{task.duration} ngày</span>
                           {task.dependencies.length > 0 && (
-                            <span className="inline-flex items-center gap-1" title={task.dependencies.join(", ")}>
-                              <Link2 size={13} aria-hidden="true" />{task.dependencies.length} tiên quyết
-                            </span>
+                            <div className="kanban-deps-wrap">
+                              <span tabIndex={0} className="kanban-deps-trigger"
+                                aria-label={`Tiên quyết của ${task.id}: ${task.dependencies.join(", ")}`}>
+                                <Link2 size={13} aria-hidden="true" />{task.dependencies.length} tiên quyết
+                              </span>
+                              <div className="kanban-deps-popover" role="tooltip">
+                                <p className="font-semibold text-zinc-200">Công việc tiên quyết</p>
+                                <ul className="mt-1 space-y-1">
+                                  {task.dependencies.map((depId) => {
+                                    const dep = taskById.get(depId);
+                                    const depStatus = dep?.status ?? "To Do";
+                                    return (
+                                      <li key={depId} className="flex items-center justify-between gap-2">
+                                        <span className="min-w-0 truncate">
+                                          <span className="font-mono text-zinc-400">{depId}</span>{" "}
+                                          <span className="text-zinc-200">{dep?.name ?? "(không tồn tại)"}</span>
+                                        </span>
+                                        <span className={`badge shrink-0 ${depStatus === "Done" ? "badge-success" : depStatus === "Doing" ? "badge-accent" : ""}`}>
+                                          {depStatus}
+                                        </span>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </div>
+                            </div>
                           )}
                         </div>
                         {incompleteDeps.length > 0 && (

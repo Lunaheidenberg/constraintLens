@@ -1,5 +1,5 @@
 import { ArrowRight, ClipboardList, LoaderCircle } from "lucide-react";
-import { dateAtOffset, formatDate } from "./calendar";
+import { dateAtOffset, formatDate, parseDateInput } from "./calendar";
 import { DateField } from "./DateField";
 import type { Plan } from "./plans";
 import { parseRemainingDuration, plannedRemainingDays, remainingDurationDifference } from "./progressReport";
@@ -44,6 +44,7 @@ export function ProgressEditor(props: ProgressEditorProps) {
   const needsReview = todoReview.length > 0 && !todoConfirmed;
   const canUseReportDate = !!asOf && (!calendar.project_start_date || asOf >= calendar.project_start_date);
   const reportDateDisplay = canUseReportDate ? formatDate(asOf) : "";
+  const taskById = new Map(tasks.map((item) => [item.id, item]));
   return (
     <section className="panel section-pad space-y-3" aria-labelledby="progress-heading">
       <h3 id="progress-heading" tabIndex={-1} className="section-title">
@@ -149,17 +150,45 @@ export function ProgressEditor(props: ProgressEditorProps) {
                         </>
                       ) : <td colSpan={2} className="p-2">
                         {confirmed ? <span className="badge badge-success">Đã xác nhận · {formatDate(confirmed.actual_finish_date)}</span>
-                          : status === "Done" ? <div className="max-w-52 space-y-1">
-                            <DateField label={`Ngày hoàn thành thực tế của ${task.id}`}
-                              min={calendar.project_start_date || undefined} max={asOf || undefined} value={value}
-                              onChange={(value) => props.onEntryChange(task.id, value)} />
-                            {canUseReportDate && value.trim() !== reportDateDisplay && (
-                              <button type="button" className="text-link progress-quick-btn"
-                                onClick={() => props.onEntryChange(task.id, reportDateDisplay)}>
-                                Dùng ngày báo cáo ({reportDateDisplay})
-                              </button>
-                            )}
-                          </div>
+                          : status === "Done" ? (() => {
+                            let latestDepFinish = "";
+                            let latestDepId = "";
+                            for (const depId of task.dependencies) {
+                              const depConfirmed = completed.get(depId)?.actual_finish_date;
+                              const depTask = taskById.get(depId);
+                              const depDraft = depTask?.status === "Done" ? parseDateInput(entries.get(depId) ?? "") : null;
+                              const depFinish = depConfirmed ?? depDraft ?? "";
+                              if (depFinish && depFinish > latestDepFinish) {
+                                latestDepFinish = depFinish;
+                                latestDepId = depId;
+                              }
+                            }
+                            const earliestAfterDep = latestDepFinish && latestDepFinish < "9999-12-31"
+                              ? dateAtOffset(latestDepFinish, 1)
+                              : "";
+                            const minFinishDate = earliestAfterDep && (!calendar.project_start_date || earliestAfterDep > calendar.project_start_date)
+                              ? earliestAfterDep
+                              : calendar.project_start_date;
+                            const canQuickFillReportDate = canUseReportDate && value.trim() !== reportDateDisplay && (!minFinishDate || asOf >= minFinishDate);
+                            return (
+                              <div className="max-w-56 space-y-1">
+                                <DateField label={`Ngày hoàn thành thực tế của ${task.id}`}
+                                  min={minFinishDate || undefined} max={asOf || undefined} value={value}
+                                  onChange={(value) => props.onEntryChange(task.id, value)} />
+                                {canQuickFillReportDate && (
+                                  <button type="button" className="text-link progress-quick-btn"
+                                    onClick={() => props.onEntryChange(task.id, reportDateDisplay)}>
+                                    Dùng ngày báo cáo ({reportDateDisplay})
+                                  </button>
+                                )}
+                                {latestDepFinish && earliestAfterDep && (!asOf || asOf <= latestDepFinish) && (
+                                  <p className="text-[11px] text-amber-300">
+                                    Phải sau ngày hoàn thành của {latestDepId} ({formatDate(latestDepFinish)}), tức từ {formatDate(earliestAfterDep)} trở đi.
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })()
                           : <span className="text-zinc-400">{task.duration} ngày theo ước tính</span>}
                       </td>}
                     </tr>

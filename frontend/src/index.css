@@ -356,6 +356,41 @@
   .kanban-card.is-draggable { cursor: grab; }
   .kanban-card.is-draggable:active { cursor: grabbing; }
   .kanban-card:hover, .kanban-card:focus-within { border-color: var(--line-strong); }
+  .kanban-deps-wrap { position: relative; display: inline-flex; align-items: center; }
+  .kanban-deps-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: var(--control-radius);
+    padding: 0.05rem 0.25rem;
+    color: var(--accent);
+    cursor: help;
+  }
+  .kanban-deps-trigger:hover, .kanban-deps-trigger:focus-visible { background: var(--accent-soft); }
+  .kanban-deps-popover {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 0.35rem);
+    z-index: 35;
+    width: max-content;
+    min-width: 13.5rem;
+    max-width: 18rem;
+    padding: 0.5rem 0.625rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--control-radius);
+    background: var(--raised);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+    font-size: 0.75rem;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 120ms ease-out;
+  }
+  .kanban-deps-wrap:hover .kanban-deps-popover,
+  .kanban-deps-wrap:focus-within .kanban-deps-popover {
+    opacity: 1;
+    visibility: visible;
+  }
   .kanban-dep-warning {
     margin-top: 0.5rem;
     padding: 0.3rem 0.5rem;
