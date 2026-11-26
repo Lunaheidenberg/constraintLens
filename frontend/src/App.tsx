@@ -1,17 +1,26 @@
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
-import { ArrowDown, ArrowRight, CalendarDays, ChartGantt, CircleHelp, Info, Layers3, LayoutGrid, ListTodo, LoaderCircle, Play, Plus, Settings2, UsersRound } from "lucide-react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ChangeEvent } from "react";
+import {
+  ArrowDown, ArrowRight, CalendarDays, ChartGantt, Check, ChevronDown, ChevronUp, CircleHelp,
+  Download, FilePlus2, Info, Layers3, LayoutGrid, ListTodo, LoaderCircle, Pencil, Play, Plus,
+  Settings2, Sparkles, Upload, UsersRound, X,
+} from "lucide-react";
 import { ApplicationGuide, HelpButton, type HelpApi } from "./ApplicationGuide";
 import { formatDate, isCalendarDate, parseDateInput } from "./calendar";
 import { DateField } from "./DateField";
 import { DeadlineWarning } from "./DeadlineWarning";
+import { readyDemoPresets, type ReadyDemoPreset } from "./demoPresets";
 import { DraftEditor } from "./DraftEditor";
 import { PlanComparison } from "./PlanComparison";
 import { PlanningInput, usePlanningAssistant } from "./PlanningAssistant";
 import { planningApplyBlock } from "./planning";
-import { assessDeadline, canAcceptProposal, hasSolution, initialPlans, planReducer } from "./plans";
+import { assessDeadline, canAcceptProposal, hasSolution, initialPlans, planReducer, type PlanState } from "./plans";
 import { ProgressEditor } from "./ProgressEditor";
 import { collectTaskProgress, hasProgressReportEdits, matchesReportedStatuses, parseRemainingDuration, progressFromPlan } from "./progressReport";
 import { hasUnscheduledStatusChanges, todoTasksDueForReview } from "./progressReview";
+import {
+  clearStoredWorkspace, exportFileName, loadQuickStartCollapsed, loadStoredWorkspace,
+  parseWorkspaceJson, saveQuickStartCollapsed, saveStoredWorkspace, serializeWorkspace,
+} from "./projectStorage";
 import { RecoveryAssistant } from "./RecoveryAssistant";
 import { recoveryContext } from "./recoveryContext";
 import { prepareScheduleResult } from "./schedulingFeedback";
@@ -152,10 +161,23 @@ function SectionTitle({ id, icon: Icon, children }: {
   );
 }
 
+interface SetupNotice {
+  kind: "success" | "error";
+  message: string;
+  action?: { label: string; view: Workspace; target?: string };
+}
+
+type AppPlanAction = Parameters<typeof planReducer>[1] | { type: "hydrate"; plans: PlanState };
+
+function appPlanReducer(state: PlanState, action: AppPlanAction): PlanState {
+  return action.type === "hydrate" ? action.plans : planReducer(state, action);
+}
+
 export default function App() {
-  const [project, setProject] = useState<ProjectState>({
-    ir: EMPTY_PROJECT, usedTaskIds: new Set(), instance: 0, scheduleRevision: 0, dirty: false,
-  });
+  const [restored] = useState(() => loadStoredWorkspace());
+  const [project, setProject] = useState<ProjectState>(() => restored
+    ? { ir: restored.ir, usedTaskIds: new Set(restored.usedTaskIds), instance: 0, scheduleRevision: 0, dirty: false }
+    : { ir: EMPTY_PROJECT, usedTaskIds: new Set(), instance: 0, scheduleRevision: 0, dirty: false });
   const { ir, usedTaskIds, instance, scheduleRevision, dirty } = project;
   const members = ir.members ?? [];
   const [presets, setPresets] = useState<PresetsMap>({});
@@ -163,19 +185,26 @@ export default function App() {
   const [presetRequest, setPresetRequest] = useState(0);
   const [selectedPreset, setSelectedPreset] = useState("");
   const [editing, setEditing] = useState<number | "new" | null>(null);
-  const [hasPlanningResult, setHasPlanningResult] = useState(false);
-  const [dateInputs, setDateInputs] = useState(EMPTY_DATES);
-  const [asOfInput, setAsOfInput] = useState("");
+  const [hasPlanningResult, setHasPlanningResult] = useState(() => Boolean(restored?.plans.accepted));
+  const [dateInputs, setDateInputs] = useState(() => restored?.dateInputs ?? EMPTY_DATES);
+  const [asOfInput, setAsOfInput] = useState(() => restored?.asOfInput ?? "");
   const calendar: ProjectCalendar = {
     project_start_date: parseDateInput(dateInputs.start) ?? "",
     target_deadline_date: parseDateInput(dateInputs.deadline),
   };
   const asOf = parseDateInput(asOfInput) ?? "";
-  const [entries, setEntries] = useState<ReadonlyMap<string, string>>(new Map());
-  const [plans, dispatchPlan] = useReducer(planReducer, initialPlans);
+  const [entries, setEntries] = useState<ReadonlyMap<string, string>>(() => new Map(restored?.entries ?? []));
+  const [plans, dispatchPlan] = useReducer(appPlanReducer, restored?.plans ?? initialPlans);
   const [phase, setPhase] = useState<SchedulePhase | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [progressFeedback, setProgressFeedback] = useState<Feedback | null>(null);
+  const [setupNotice, setSetupNotice] = useState<SetupNotice | null>(null);
+  const [importError, setImportError] = useState("");
+  const [quickStartCollapsed, setQuickStartCollapsed] = useState(() => loadQuickStartCollapsed());
+  const [renamingProject, setRenamingProject] = useState(false);
+  const [projectNameDraft, setProjectNameDraft] = useState("");
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const readyDemos = readyDemoPresets();
   const activeRequest = useRef<AbortController | null>(null);
   const [workspace, setWorkspace] = useState<Workspace>("setup");
   const focusTarget = useRef<string | null>(null);
@@ -271,6 +300,32 @@ export default function App() {
     activeRequest.current?.abort();
   }, []);
 
+  useEffect(() => {
+    const isDefaultEmpty =
+      !ir.tasks.length &&
+      !(ir.members?.length) &&
+      ir.project_name === EMPTY_PROJECT.project_name &&
+      !dateInputs.start &&
+      !dateInputs.deadline &&
+      !asOfInput &&
+      entries.size === 0 &&
+      !plans.accepted &&
+      !plans.baseline;
+    if (isDefaultEmpty) {
+      clearStoredWorkspace();
+      return;
+    }
+    saveStoredWorkspace({
+      version: 1,
+      ir,
+      usedTaskIds: [...usedTaskIds],
+      dateInputs,
+      asOfInput,
+      entries: [...entries.entries()],
+      plans,
+    });
+  }, [ir, usedTaskIds, dateInputs, asOfInput, entries, plans]);
+
   function cancelScheduling() {
     activeRequest.current?.abort();
     activeRequest.current = null;
@@ -307,7 +362,7 @@ export default function App() {
     setDateInputs((current) => ({ ...current, [field]: value }));
   }
 
-  function loadProject(next: SchedulingIR, preset: string) {
+  function loadProject(next: SchedulingIR, preset: string, nextDates = EMPTY_DATES) {
     editVersion.current += 1;
     cancelScheduling();
     setProject((current) => ({
@@ -322,14 +377,105 @@ export default function App() {
     dispatchPlan({ type: "reset" });
     setFeedback(null);
     setProgressFeedback(null);
+    setSetupNotice(null);
+    setImportError("");
+    setRenamingProject(false);
     setEditing(null);
-    setDateInputs(EMPTY_DATES);
+    setDateInputs(nextDates);
     setAsOfInput("");
     setEntries(new Map());
   }
 
-  function confirmReplace() {
-    return !dirty || window.confirm("Thay thế dự án hiện tại và bỏ các thay đổi đang chỉnh sửa?");
+  const hasProjectContent = dirty || ir.tasks.length > 0 || members.length > 0 ||
+    !!dateInputs.start || !!dateInputs.deadline || accepted !== null;
+
+  function confirmReplace(message = "Thay thế dự án hiện tại và bỏ các thay đổi đang chỉnh sửa?") {
+    return !dirty || window.confirm(message);
+  }
+
+  function confirmDiscardContent(message: string) {
+    return !hasProjectContent || window.confirm(message);
+  }
+
+  function resetProject() {
+    if (!confirmDiscardContent("Tạo dự án mới và xóa dữ liệu dự án hiện tại?")) return;
+    assistant.describe();
+    clearStoredWorkspace();
+    loadProject(EMPTY_PROJECT, "", EMPTY_DATES);
+    setWorkspace("setup");
+  }
+
+  function loadReadyDemo(demo: ReadyDemoPreset) {
+    if (!confirmDiscardContent(`Nạp "${demo.ir.project_name}" và thay thế dữ liệu hiện tại?`)) return;
+    assistant.cancelRequest();
+    loadProject(demo.ir, "", demo.dateInputs);
+    setSetupNotice({
+      kind: "success",
+      message: `Đã nạp "${demo.ir.project_name}" kèm ngày bắt đầu, hạn chót, ${demo.ir.members?.length ?? 0} thành viên và phân công sẵn.`,
+      action: { label: "Đến Kế hoạch để tính lịch", view: "planning", target: "solve-heading" },
+    });
+  }
+
+  function exportProject() {
+    const content = serializeWorkspace({
+      version: 1,
+      ir,
+      usedTaskIds: [...usedTaskIds],
+      dateInputs,
+      asOfInput,
+      entries: [...entries.entries()],
+      plans,
+    });
+    const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = exportFileName(ir.project_name);
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importProjectFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setImportError("");
+    try {
+      const parsed = parseWorkspaceJson(await file.text());
+      if (!parsed.ok) {
+        setImportError(parsed.error);
+        return;
+      }
+      if (!confirmDiscardContent(`Nhập dự án "${parsed.data.ir.project_name}" và thay thế dự án hiện tại?`)) return;
+      const { data } = parsed;
+      editVersion.current += 1;
+      cancelScheduling();
+      assistant.describe();
+      setProject((current) => ({
+        ir: data.ir,
+        usedTaskIds: new Set(data.usedTaskIds),
+        instance: current.instance + 1,
+        scheduleRevision: current.scheduleRevision + 1,
+        dirty: false,
+      }));
+      setSelectedPreset("");
+      setHasPlanningResult(Boolean(data.plans.accepted));
+      dispatchPlan({ type: "hydrate", plans: data.plans });
+      setDateInputs(data.dateInputs);
+      setAsOfInput(data.asOfInput);
+      setEntries(new Map(data.entries));
+      setFeedback(null);
+      setProgressFeedback(null);
+      setRenamingProject(false);
+      setEditing(null);
+      setSetupNotice({
+        kind: "success",
+        message: `Đã nhập dự án "${data.ir.project_name}" (${data.ir.tasks.length} công việc).`,
+        action: { label: "Đến Kế hoạch", view: "planning", target: "tasks-heading" },
+      });
+    } catch {
+      setImportError("Không đọc được tệp đã chọn. Hãy thử lại.");
+    }
   }
 
   async function validateProject(solve: boolean) {
@@ -493,6 +639,13 @@ export default function App() {
     }
     if (editing === "new") {
       changeProject((current) => ({ ...current, tasks: [...current.tasks, updated] }));
+      if (workspace === "setup") {
+        setSetupNotice({
+          kind: "success",
+          message: `Đã thêm công việc ${updated.id} (${updated.name}) vào tab Kế hoạch.`,
+          action: { label: "Xem trong Kế hoạch", view: "planning", target: "tasks-heading" },
+        });
+      }
       return;
     }
     if (!original || completed.has(original.id) || (updated.id !== original.id && protectTaskIdentity(original))) return;
@@ -635,6 +788,12 @@ export default function App() {
       </button>
     </div>
   );
+  const setupReady = ir.tasks.length > 0 && members.length > 0 && !!calendar.project_start_date && !dateErrors.length;
+  const stepDone: Record<Workspace, boolean> = {
+    setup: setupReady,
+    planning: accepted !== null,
+    recovery: confirmedProgress !== null,
+  };
   const projectView = (
     <div className="app-shell" onChangeCapture={(event) => {
       if (!(event.target instanceof Element && event.target.closest("[data-recovery-assistant]"))) editVersion.current += 1;
@@ -652,6 +811,7 @@ export default function App() {
               aria-controls={`workspace-${id}`} className="workspace-link" onClick={() => goTo(id)}>
               <Icon size={17} aria-hidden="true" />
               {label}
+              {stepDone[id] && <Check size={14} aria-hidden="true" className="nav-check" />}
               {(id === "setup" && assistant.draft || id === "planning" && proposal && !proposal.plan.recovery ||
                 id === "recovery" && proposal?.plan.recovery) &&
                 <span className="nav-indicator"><span className="sr-only">Có bản xem trước</span></span>}
@@ -663,15 +823,63 @@ export default function App() {
       <main className="min-w-0">
         <header className="project-bar">
           <div className="project-bar-inner">
-            <h1 id="project-heading" tabIndex={-1} className="min-w-0 break-words text-sm font-semibold">{ir.project_name}</h1>
+            <div className="project-title-group">
+              {renamingProject ? (
+                <form className="project-rename-form" onSubmit={(event) => {
+                  event.preventDefault();
+                  const trimmed = projectNameDraft.trim();
+                  if (!trimmed) return;
+                  if (trimmed !== ir.project_name) {
+                    changeProject((current) => ({ ...current, project_name: trimmed }), false);
+                  }
+                  setRenamingProject(false);
+                }}>
+                  <input autoFocus aria-label="Tên dự án" className="control project-rename-input" maxLength={120}
+                    value={projectNameDraft} onChange={(event) => setProjectNameDraft(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Escape") setRenamingProject(false); }} />
+                  <button className="button" type="submit" disabled={!projectNameDraft.trim()}>Lưu tên</button>
+                  <button className="button quiet" type="button" onClick={() => setRenamingProject(false)}>Hủy</button>
+                </form>
+              ) : (
+                <>
+                  <h1 id="project-heading" tabIndex={-1} className="min-w-0 break-words text-sm font-semibold">{ir.project_name}</h1>
+                  <button type="button" className="button quiet icon-button" aria-label="Đổi tên dự án" title="Đổi tên dự án"
+                    onClick={() => { setProjectNameDraft(ir.project_name); setRenamingProject(true); }}>
+                    <Pencil size={13} aria-hidden="true" />
+                  </button>
+                </>
+              )}
+            </div>
             <div className="project-bar-actions">
               <div className="project-counts">
                 <span><ListTodo size={14} aria-hidden="true" /> {ir.tasks.length} công việc</span>
                 <span><UsersRound size={14} aria-hidden="true" /> {members.length} thành viên</span>
               </div>
+              <div className="project-file-actions">
+                <button type="button" className="button" title="Tạo dự án trống mới" onClick={resetProject}>
+                  <FilePlus2 size={14} aria-hidden="true" /> Dự án mới
+                </button>
+                <button type="button" className="button" title="Xuất dự án ra tệp JSON" onClick={exportProject}>
+                  <Download size={14} aria-hidden="true" /> Xuất JSON
+                </button>
+                <button type="button" className="button" title="Nhập dự án từ tệp JSON" onClick={() => importInputRef.current?.click()}>
+                  <Upload size={14} aria-hidden="true" /> Nhập JSON
+                </button>
+                <input ref={importInputRef} type="file" accept=".json,application/json" className="sr-only"
+                  aria-label="Chọn tệp dự án JSON" onChange={(event) => void importProjectFile(event)} />
+              </div>
               <HelpButton />
             </div>
           </div>
+          {importError && (
+            <div className="project-bar-alert">
+              <div role="alert" className="notice error flex items-center justify-between gap-3">
+                <span>{importError}</span>
+                <button type="button" className="button quiet icon-button" aria-label="Đóng thông báo lỗi"
+                  onClick={() => setImportError("")}><X size={14} aria-hidden="true" /></button>
+              </div>
+            </div>
+          )}
         </header>
 
         <div className="workspace">
@@ -683,6 +891,79 @@ export default function App() {
               </div>
               <button className="button primary" onClick={() => goTo("planning")}>Đến kế hoạch <ArrowRight size={15} aria-hidden="true" /></button>
             </div>
+            <section className="panel quickstart-card" aria-labelledby="quickstart-heading">
+              <div className="section-bar">
+                <div className="min-w-0">
+                  <h3 id="quickstart-heading" className="section-title">
+                    <Sparkles size={15} aria-hidden="true" className="section-icon text-[var(--accent)]" /> Hướng dẫn nhanh · Quy trình 3 bước
+                  </h3>
+                  {!quickStartCollapsed && (
+                    <p className="helper mt-1">
+                      Chuẩn bị công việc &amp; ngày ở Thiết lập, phân công &amp; tối ưu lịch bằng CP-SAT ở Kế hoạch, rồi cập nhật thực tế ở Tiến độ. Dữ liệu tự lưu trên trình duyệt.
+                    </p>
+                  )}
+                </div>
+                <button type="button" className="button quiet" aria-expanded={!quickStartCollapsed}
+                  onClick={() => {
+                    const next = !quickStartCollapsed;
+                    setQuickStartCollapsed(next);
+                    saveQuickStartCollapsed(next);
+                  }}>
+                  {quickStartCollapsed ? <><ChevronDown size={15} aria-hidden="true" /> Mở hướng dẫn</> : <><ChevronUp size={15} aria-hidden="true" /> Thu gọn</>}
+                </button>
+              </div>
+              {!quickStartCollapsed && (
+                <>
+                  <ol className="quickstart-steps" aria-label="Tiến trình thiết lập và lập lịch">
+                    {[
+                      { id: "setup" as const, step: "Bước 1", title: "Thiết lập", detail: setupReady ? "Đã đủ công việc, ngày & thành viên" : "Thêm việc, ngày bắt đầu & thành viên" },
+                      { id: "planning" as const, step: "Bước 2", title: "Kế hoạch", detail: accepted ? "Đã chấp nhận lịch tham chiếu" : "Phân công & bấm Tính lịch ban đầu" },
+                      { id: "recovery" as const, step: "Bước 3", title: "Tiến độ", detail: confirmedProgress ? "Đã ghi nhận báo cáo tiến độ" : "Cập nhật Kanban & lập lại lịch" },
+                    ].map((item) => (
+                      <li key={item.id} className={`quickstart-step ${stepDone[item.id] ? "is-done" : ""}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="eyebrow">{item.step}</span>
+                          <span className={`badge ${stepDone[item.id] ? "badge-success" : ""}`}>
+                            {stepDone[item.id] ? "Hoàn tất" : "Chưa xong"}
+                          </span>
+                        </div>
+                        <p className="mt-1 font-semibold">{item.title}</p>
+                        <p className="helper mt-0.5">{item.detail}</p>
+                      </li>
+                    ))}
+                  </ol>
+                  <div className="quickstart-demos">
+                    <span className="helper font-medium text-zinc-300">Chạy thử ngay với mẫu đầy đủ:</span>
+                    <div className="flex flex-wrap gap-2">
+                      {readyDemos.map((demo) => (
+                        <button key={demo.id} type="button" className="button setup-draft-button" title={demo.summary}
+                          onClick={() => loadReadyDemo(demo)}>
+                          <Play size={13} aria-hidden="true" /> {demo.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </section>
+            {setupNotice && (
+              <div role={setupNotice.kind === "error" ? "alert" : "status"}
+                className={`notice ${setupNotice.kind} flex flex-wrap items-center justify-between gap-3`}>
+                <p className="font-medium">{setupNotice.message}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {setupNotice.action && (
+                    <button type="button" className="button" onClick={() => {
+                      const action = setupNotice.action!;
+                      goTo(action.view, action.target);
+                    }}>
+                      {setupNotice.action.label} <ArrowRight size={14} aria-hidden="true" />
+                    </button>
+                  )}
+                  <button type="button" className="button quiet icon-button" aria-label="Đóng thông báo"
+                    onClick={() => setSetupNotice(null)}><X size={14} aria-hidden="true" /></button>
+                </div>
+              </div>
+            )}
             <div className="setup-grid">
               <section className="setup-source" aria-labelledby="source-heading">
                 <div className="section-bar">
@@ -718,7 +999,7 @@ export default function App() {
                 <section aria-labelledby="calendar-heading">
                   <SectionTitle id="calendar-heading" icon={CalendarDays}>Lịch dự án</SectionTitle>
                   <div className="setup-calendar-fields">
-                    <DateField label="Ngày bắt đầu dự án" value={dateInputs.start} required
+                    <DateField label="Ngày bắt đầu dự án" value={dateInputs.start} required quickToday
                       onChange={(value) => changeCalendar("start", value)} />
                     <DateField label="Hạn chót (tùy chọn)" value={dateInputs.deadline} min={calendar.project_start_date || undefined}
                       onChange={(value) => changeCalendar("deadline", value)} />

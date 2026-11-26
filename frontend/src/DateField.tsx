@@ -11,6 +11,7 @@ interface DateFieldProps {
   required?: boolean;
   hideLabel?: boolean;
   describedBy?: string;
+  quickToday?: boolean;
 }
 
 function today() {
@@ -35,7 +36,7 @@ const weekdays = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
 const dayKeys: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
 
 export function DateField({
-  label, value, onChange, min = FIRST_DATE, max = LAST_DATE, required, hideLabel, describedBy,
+  label, value, onChange, min = FIRST_DATE, max = LAST_DATE, required, hideLabel, describedBy, quickToday,
 }: DateFieldProps) {
   const id = useId();
   const inputError = id + "-error";
@@ -79,21 +80,49 @@ export function DateField({
   const days = cursor ? dayOffset(start, end) + 1 : 0;
   // 01/01/2024 was a Monday. Use day offsets so the grid is independent of local time.
   const weekday = ((dayOffset("2024-01-01", start) % 7) + 7) % 7;
-  const monthTitle = "Tháng " + Number(start.slice(5, 7)) + ", " + start.slice(0, 4);
+  const todayIso = today();
+  const canUseToday = todayIso >= min && todayIso <= max;
+  const showClear = !required && value.trim().length > 0;
+  const currentYear = Number(start.slice(0, 4));
+  const currentMonthNumber = Number(start.slice(5, 7));
+  const minYear = Number(min.slice(0, 4));
+  const maxYear = Number(max.slice(0, 4));
+  const baseYear = Number(todayIso.slice(0, 4));
+  const years: number[] = [];
+  for (let year = Math.max(minYear, baseYear - 3); year <= Math.min(maxYear, baseYear + 8); year++) {
+    years.push(year);
+  }
+  if (currentYear >= minYear && currentYear <= maxYear && !years.includes(currentYear)) {
+    years.push(currentYear);
+    years.sort((a, b) => a - b);
+  }
 
   return (
     <div className="field date-field">
       <label htmlFor={id} className={hideLabel ? "sr-only" : undefined}>{label}</label>
       <div className="date-input-group">
-        <input id={id} type="text" className="control date-input" placeholder="DD/MM/YYYY"
+        <input id={id} type="text" className={`control date-input ${showClear ? "has-clear" : ""}`} placeholder="DD/MM/YYYY"
           autoComplete="off" spellCheck={false} value={value} required={required}
           aria-invalid={showError || undefined} aria-describedby={description}
           onChange={(event) => onChange(event.target.value)} onBlur={() => setTouched(true)} />
+        {showClear && (
+          <button className="button quiet icon-button date-clear" type="button"
+            aria-label={"Xóa " + label.toLocaleLowerCase("vi")} title="Xóa ngày" onClick={() => onChange("")}>
+            <X size={14} aria-hidden="true" />
+          </button>
+        )}
         <button ref={trigger} className="button quiet icon-button date-trigger" type="button" aria-haspopup="dialog"
           aria-label={"Mở lịch cho " + label.toLocaleLowerCase("vi")} disabled={min > max} onClick={openCalendar}>
           <CalendarDays size={16} aria-hidden="true" />
         </button>
       </div>
+      {quickToday && !value.trim() && canUseToday && (
+        <div className="date-quick-actions">
+          <button type="button" className="text-link" onClick={() => onChange(formatDate(todayIso))}>
+            Điền ngày hôm nay ({formatDate(todayIso)})
+          </button>
+        </div>
+      )}
       {showError && <p className="date-error" id={inputError}>{error}</p>}
       <dialog ref={dialog} className="calendar-dialog panel" aria-labelledby={calendarTitle} onClose={() => {
         setCursor("");
@@ -108,7 +137,20 @@ export function DateField({
         <div className="calendar-month">
           <button type="button" className="button quiet icon-button" aria-label="Tháng trước"
             disabled={month <= monthIndex(min)} onClick={() => moveMonth(month - 1)}><ChevronLeft size={16} aria-hidden="true" /></button>
-          <p aria-live="polite">{monthTitle}</p>
+          <div className="calendar-selects">
+            <select aria-label="Chọn tháng" className="control calendar-select" value={currentMonthNumber}
+              onChange={(event) => moveMonth((currentYear - 1) * 12 + Number(event.target.value) - 1)}>
+              {Array.from({ length: 12 }, (_, idx) => {
+                const nextMonth = (currentYear - 1) * 12 + idx;
+                const disabled = nextMonth < monthIndex(min) || nextMonth > monthIndex(max);
+                return <option key={idx + 1} value={idx + 1} disabled={disabled}>Tháng {idx + 1}</option>;
+              })}
+            </select>
+            <select aria-label="Chọn năm" className="control calendar-select" value={currentYear}
+              onChange={(event) => moveMonth((Number(event.target.value) - 1) * 12 + (currentMonthNumber - 1))}>
+              {years.map((year) => <option key={year} value={year}>{year}</option>)}
+            </select>
+          </div>
           <button type="button" className="button quiet icon-button" aria-label="Tháng sau"
             disabled={month >= monthIndex(max)} onClick={() => moveMonth(month + 1)}><ChevronRight size={16} aria-hidden="true" /></button>
         </div>
@@ -133,6 +175,18 @@ export function DateField({
                 dialog.current?.close();
               }}>{index + 1}</button>;
           })}
+        </div>
+        <div className="calendar-footer">
+          <button type="button" className="button" disabled={!canUseToday} onClick={() => {
+            onChange(formatDate(todayIso));
+            dialog.current?.close();
+          }}>Hôm nay</button>
+          {showClear && (
+            <button type="button" className="button quiet" onClick={() => {
+              onChange("");
+              dialog.current?.close();
+            }}>Xóa ngày</button>
+          )}
         </div>
       </dialog>
     </div>
