@@ -12,29 +12,35 @@ import {
 const USER_KEY = "AIza-user-byok-secret-test";
 
 test("normalizeModelId strips models/ prefix and validates safe gemini IDs", () => {
-  assert.equal(normalizeModelId("models/gemini-2.5-pro"), "gemini-2.5-pro");
-  assert.equal(normalizeModelId("  GEMINI-2.0-FLASH-LITE  "), "gemini-2.0-flash-lite");
+  assert.equal(normalizeModelId("models/gemini-3.8-flash"), "gemini-3.8-flash");
+  assert.equal(normalizeModelId("  GEMINI-3.5-FLASH  "), "gemini-3.5-flash");
   assert.equal(normalizeModelId("invalid model!"), DEFAULT_BYOK_MODEL);
-  assert.ok(BYOK_MODEL_PRESETS.length >= 5);
+  assert.ok(BYOK_MODEL_PRESETS.length >= 4);
+  assert.equal(
+    BYOK_MODEL_PRESETS.some((preset) => preset.id.startsWith("gemini-1.") || preset.id.startsWith("gemini-2.")),
+    false,
+  );
 });
 
 test("verifyByokKey, byokClarify, and byokGenerateDraft call Google directly with x-goog-api-key", async (t) => {
   const calls = [];
   t.mock.method(globalThis, "fetch", async (url, options) => {
     calls.push({ url, options });
-    if (url.endsWith("/models/gemini-2.5-pro")) {
-      return Response.json({ name: "models/gemini-2.5-pro" });
+    if (url.endsWith("/models/gemini-3.8-flash")) {
+      return Response.json({ name: "models/gemini-3.8-flash" });
     }
     if (url.includes("/models?pageSize=50")) {
       return Response.json({
         models: [
-          { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] },
-          { name: "models/gemini-2.5-pro", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-3.6-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-3.8-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-2.0-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-1.5-flash", supportedGenerationMethods: ["generateContent"] },
           { name: "models/embedding-001", supportedGenerationMethods: ["embedContent"] },
         ],
       });
     }
-    if (url.endsWith("/models/gemini-2.5-pro:generateContent")) {
+    if (url.endsWith("/models/gemini-3.8-flash:generateContent")) {
       const body = JSON.parse(options.body);
       if (body.generationConfig.responseSchema.required.includes("questions")) {
         return Response.json({
@@ -74,12 +80,12 @@ test("verifyByokKey, byokClarify, and byokGenerateDraft call Google directly wit
     throw new Error(`Unexpected URL ${url}`);
   });
 
-  const verified = await verifyByokKey(USER_KEY, "models/gemini-2.5-pro");
+  const verified = await verifyByokKey(USER_KEY, "models/gemini-3.8-flash");
   assert.equal(verified.ok, true);
-  assert.deepEqual(verified.availableModels, ["gemini-2.5-flash", "gemini-2.5-pro"]);
+  assert.deepEqual(verified.availableModels, ["gemini-3.6-flash", "gemini-3.8-flash"]);
 
   const signal = new AbortController().signal;
-  const clarified = await byokClarify("Làm web bán sách", USER_KEY, "gemini-2.5-pro", signal);
+  const clarified = await byokClarify("Làm web bán sách", USER_KEY, "gemini-3.8-flash", signal);
   assert.equal(clarified.goal, "Bán sách");
   assert.deepEqual(clarified.questions, [{ id: "Q1", text: "Ai tham gia dự án?" }]);
 
@@ -87,7 +93,7 @@ test("verifyByokKey, byokClarify, and byokGenerateDraft call Google directly wit
     { ...clarified, prompt: "Làm web bán sách", answers: { Q1: "An phụ trách thiết kế" } },
     false,
     USER_KEY,
-    "gemini-2.5-pro",
+    "gemini-3.8-flash",
     signal,
   );
   assert.equal(planned.draft.project_name, "Bookstore BYOK");

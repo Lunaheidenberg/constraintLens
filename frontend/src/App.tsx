@@ -326,7 +326,7 @@ function AiSettingsDialog({
 
             {selectedModel === "__custom__" && (
               <label className="field">Mã model Gemini tùy chỉnh
-                <input type="text" className="control w-full font-mono" placeholder="Ví dụ: gemini-2.5-flash-preview-05-20"
+                <input type="text" className="control w-full font-mono" placeholder="Ví dụ: gemini-3.8-flash"
                   value={customModel} onChange={(event) => {
                     setCustomModel(event.target.value);
                     setCheckState({ status: "idle" });
@@ -389,7 +389,7 @@ function AiSettingsDialog({
           </div>
         ) : (
           <p className="helper">
-            Ở chế độ mặc định, yêu cầu AI sử dụng cấu hình của máy chủ ConstraintLens. Nếu máy chủ hết hạn mức hoặc bạn muốn dùng model riêng (như Gemini 2.5 Pro / Flash-Lite), hãy chuyển sang <strong>Khóa cá nhân (BYOK)</strong>.
+            Ở chế độ mặc định, yêu cầu AI sử dụng cấu hình của máy chủ ConstraintLens. Nếu máy chủ hết hạn mức hoặc bạn muốn dùng model riêng (như Gemini 3.8 Flash / 3.7 Flash), hãy chuyển sang <strong>Khóa cá nhân (BYOK)</strong>.
           </p>
         )}
 

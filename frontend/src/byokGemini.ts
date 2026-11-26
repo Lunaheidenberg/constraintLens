@@ -15,15 +15,13 @@ export interface ByokModelPreset {
 }
 
 export const BYOK_MODEL_PRESETS: readonly ByokModelPreset[] = [
-  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash — Khuyên dùng (cân bằng)" },
-  { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite — Nhanh, tiết kiệm hạn mức" },
-  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro — Phân tích sâu, dự án phức tạp" },
-  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash — Ổn định, phản hồi nhanh" },
-  { id: "gemini-2.0-flash-lite", label: "Gemini 2.0 Flash-Lite — Nhẹ, ít nghẽn" },
   { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash — Mặc định theo dự án" },
+  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash — Mới nhất, suy luận tốt" },
+  { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash — Cân bằng tốc độ và chất lượng" },
+  { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash — Ổn định, dự phòng nhanh" },
 ];
 
-export const DEFAULT_BYOK_MODEL = "gemini-2.5-flash";
+export const DEFAULT_BYOK_MODEL = "gemini-3.6-flash";
 
 export interface ByokConfig {
   enabled: boolean;
@@ -77,7 +75,7 @@ function mapProviderStatusError(status: number, bodyText: string, apiKey: string
     return "Khóa Gemini cá nhân không hợp lệ hoặc đã bị thu hồi. Hãy kiểm tra lại khóa trong Google AI Studio.";
   }
   if (status === 429) {
-    return "Khóa Gemini cá nhân đã chạm giới hạn yêu cầu hoặc hết hạn mức miễn phí. Hãy thử lại sau hoặc đổi sang model Lite.";
+    return "Khóa Gemini cá nhân đã chạm giới hạn yêu cầu hoặc hết hạn mức miễn phí. Hãy thử lại sau hoặc đổi sang phiên bản Gemini 3.x khác.";
   }
   if (status === 404) {
     return "Phiên bản model Gemini đã chọn không khả dụng cho khóa này. Hãy thử chọn phiên bản model khác.";
@@ -89,7 +87,7 @@ function mapProviderStatusError(status: number, bodyText: string, apiKey: string
     return "Kết nối trực tiếp tới Gemini quá thời gian chờ. Hãy thử lại.";
   }
   if (status >= 500) {
-    return "Dịch vụ Gemini đang quá tải tạm thời. Hãy thử lại sau hoặc chuyển sang model Gemini 2.5 Flash-Lite / 2.0 Flash.";
+    return "Dịch vụ Gemini đang quá tải tạm thời. Hãy thử lại sau hoặc chuyển sang phiên bản Gemini 3.x khác.";
   }
   return `Gemini trả về lỗi HTTP ${status}. Hãy thử lại.`;
 }
@@ -200,7 +198,7 @@ export async function verifyByokKey(
           item.supportedGenerationMethods?.includes("generateContent"),
         )
         .map((item) => item.name!.replace(/^models\//, ""))
-        .filter((id) => MODEL_ID_PATTERN.test(id));
+        .filter((id) => MODEL_ID_PATTERN.test(id) && !id.startsWith("gemini-1.") && !id.startsWith("gemini-2."));
       if (discovered.length) {
         availableModels = [...new Set(discovered)];
       }
