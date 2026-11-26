@@ -85,10 +85,10 @@ class ApplicationGuideTests(IsolatedAsyncioTestCase):
     def test_documented_controls_have_matching_react_labels(self):
         source = Path(__file__).resolve().parents[1] / "frontend" / "src"
         controls = {
-            "App.tsx": ("Kịch bản mẫu", "Ngày bắt đầu dự án", "Tính lịch ban đầu", "Chấp nhận lịch", "So sánh kế hoạch", "Bảng Kanban"),
+            "App.tsx": ("Kịch bản & mẫu chạy thử", "Kịch bản mẫu", "Cài đặt Gemini AI & BYOK", "Xuất JSON", "Nhập JSON", "Ngày bắt đầu dự án", "Tính lịch ban đầu", "Chấp nhận lịch", "So sánh kế hoạch", "Bảng Kanban"),
             "ProjectEditor.tsx": ("Thêm công việc", "Chỉnh sửa", "Người phụ trách", "Di chuyển"),
-            "Schedule.tsx": ("Hạn mục tiêu",),
-            "ProgressEditor.tsx": ("Báo cáo tiến độ", "Kiểm tra tiến độ", "Đề xuất lịch mới", "Còn lại thực tế", "Ngày hoàn thành thực tế"),
+            "Schedule.tsx": ("Hạn mục tiêu", "Theo thành viên"),
+            "ProgressEditor.tsx": ("Báo cáo tiến độ", "Kiểm tra tiến độ", "Đề xuất lịch mới", "Còn lại thực tế", "Ngày hoàn thành thực tế", "Dùng ngày báo cáo", "Theo kế hoạch"),
             "PlanComparison.tsx": ("Chi tiết thay đổi",),
             "DeadlineWarning.tsx": ("Điều chỉnh kế hoạch",),
             "PlanningAssistant.tsx": ("Mô tả dự án", "AI giúp lập kế hoạch", "Bỏ qua tất cả"),

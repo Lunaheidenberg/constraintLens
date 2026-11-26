@@ -29,15 +29,15 @@ class Topic:
 TOPICS = {
     "create-schedule": Topic(
         "Làm sao tạo lịch dự án?",
-        "Trong Thiết lập, chọn Kịch bản mẫu hoặc thêm công việc, nhập Ngày bắt đầu dự án và thêm thành viên. "
+        "Trong Thiết lập, chọn Kịch bản & mẫu chạy thử (mẫu chạy ngay có sẵn ngày và thành viên hoặc Kịch bản mẫu ban đầu) hoặc thêm công việc, nhập Ngày bắt đầu dự án và thêm thành viên. "
         "Sang Kế hoạch, chọn Người phụ trách cho từng việc và bấm Tính lịch ban đầu. "
-        "Xem lịch đề xuất trên Gantt rồi bấm Chấp nhận lịch nếu chưa đặt hạn hoặc lịch đáp ứng hạn chót.",
+        "Xem lịch đề xuất trên Gantt rồi bấm Chấp nhận lịch nếu chưa đặt hạn hoặc lịch đáp ứng hạn chót. "
+        "Dữ liệu tự lưu trên trình duyệt và có thể dùng Xuất JSON hoặc Nhập JSON để sao lưu dự án.",
         ("tạo lịch", "tính lịch ban đầu", "tạo lịch trình", "lập lịch", "lên lịch"),
     ),
     "tasks-and-assignments": Topic(
         "Làm sao quản lý và phân công công việc?",
-        "Thêm thành viên trong Thiết lập. Trong Kế hoạch, dùng Thêm công việc hoặc Chỉnh sửa để đặt tên, "
-        "thời lượng và công việc tiên quyết. Chọn Người phụ trách trong bảng hoặc trình chỉnh sửa. "
+        "Thêm thành viên trong Thiết lập. Trong Kế hoạch, dùng Thêm công việc, sửa trực tiếp tên, số ngày, danh mục, công việc tiên quyết và Người phụ trách ngay trên bảng, hoặc mở Chỉnh sửa để cập nhật đầy đủ và xóa công việc. "
         "Đổi hoặc bỏ các phân công liên quan trước khi xóa một thành viên.",
         ("phân công", "quản lý công việc", "thêm công việc", "thêm task", "sửa công việc", "giao việc", "gán người", "người phụ trách", "thêm thành viên", "xóa thành viên"),
     ),
@@ -51,7 +51,7 @@ TOPICS = {
     "kanban-vs-gantt": Topic(
         "Kanban và Gantt khác nhau thế nào?",
         "Bảng Kanban trong Tiến độ theo dõi trạng thái To Do, Doing và Done. "
-        "Gantt trong Kế hoạch hiển thị khoảng ngày dự kiến của công việc và các mốc hoàn thành thực tế đã xác nhận, nếu có.",
+        "Gantt trong Kế hoạch hiển thị khoảng ngày dự kiến của công việc, phần vượt hạn chót, các mốc hoàn thành thực tế đã xác nhận (nếu có), và hỗ trợ chuyển chế độ xem Theo công việc hoặc Theo thành viên.",
         ("kanban và gantt", "kanban khác gantt", "kanban khác gì gantt", "gantt khác kanban", "kanban với gantt", "gantt là gì", "đọc gantt", "so sánh kanban"),
     ),
     "kanban": Topic(
@@ -76,9 +76,9 @@ TOPICS = {
     ),
     "update-progress": Topic(
         "Làm sao cập nhật tiến độ công việc?",
-        "Trong Tiến độ, kéo thẻ Kanban hoặc dùng Di chuyển để chọn trạng thái. Khi đã chấp nhận lịch ban đầu, "
-        "mở Báo cáo tiến độ, chọn ngày báo cáo, nhập số ngày còn lại cho việc Doing và ngày hoàn thành cho việc Done. "
-        "Dùng Kiểm tra tiến độ để rà soát dữ liệu. "
+        "Trong Tiến độ, kéo cả thẻ Kanban, dùng Di chuyển hoặc đổi trạng thái trực tiếp trong Báo cáo tiến độ. "
+        "Khi đã chấp nhận lịch ban đầu, chọn ngày báo cáo, nhập số ngày còn lại cho việc Doing (có thể bấm Theo kế hoạch) và ngày hoàn thành cho việc Done (có thể bấm Dùng ngày báo cáo). "
+        "Dùng Kiểm tra tiến độ để rà soát dữ liệu trước hoặc bấm Đề xuất lịch mới để kiểm tra và tính lại lịch. "
         "Đổi trạng thái trên Kanban giữ nguyên các khoảng ngày của lịch đang áp dụng cho đến khi bạn chấp nhận lịch mới.",
         ("cập nhật tiến độ", "đổi trạng thái", "chuyển trạng thái", "báo cáo tiến độ", "di chuyển thẻ"),
     ),
@@ -114,15 +114,15 @@ TOPICS = {
     ),
     "ai-planning": Topic(
         "Dùng AI giúp lập kế hoạch như thế nào?",
-        "Trong Thiết lập, nhập Mô tả dự án rồi chọn AI giúp lập kế hoạch. "
+        "Trong Thiết lập, nhập Mô tả dự án rồi chọn AI giúp lập kế hoạch (có thể cấu hình khóa riêng trong Cài đặt Gemini AI & BYOK để gọi trực tiếp từ trình duyệt). "
         "Trả lời câu hỏi làm rõ nếu có hoặc chọn Bỏ qua tất cả, rồi tạo bản nháp. "
-        "Kiểm tra công việc, thời lượng và việc tiên quyết. Bấm Áp dụng bản nháp vào dự án chưa có công việc, lịch hoặc tiến độ. "
-        "Sau đó tự phân công và tính lịch.",
+        "Kiểm tra công việc, thời lượng, việc tiên quyết và thành viên hoặc phân công AI gợi ý, rồi bấm Áp dụng bản nháp vào dự án chưa có công việc, lịch hoặc tiến độ. "
+        "Sau đó hoàn thiện phân công nếu còn thiếu và tính lịch.",
         ("ai giúp lập kế hoạch", "ai planning assistant", "ai planning", "trợ lý lập kế hoạch", "tạo bản nháp", "áp dụng bản nháp", "dùng ai", "bản nháp gemini"),
     ),
     "bulk-draft-review": Topic(
         "Làm sao xác nhận hàng loạt các gợi ý trong bản nháp?",
-        "Trong bản nháp Gemini, bấm Xác nhận các gợi ý để duyệt cùng lúc thời lượng và việc tiên quyết AI đã đề xuất. "
+        "Trong bản nháp Gemini, bấm Xác nhận các gợi ý để duyệt cùng lúc thời lượng, việc tiên quyết và phân công AI đã đề xuất. "
         "Với giá trị còn thiếu, hãy sửa từng công việc để nhập số ngày, chọn việc tiên quyết hoặc xác nhận không có việc tiên quyết. "
         "Hoàn tất các mục cần duyệt rồi bấm Áp dụng bản nháp.",
         ("xác nhận các gợi ý", "nút xác nhận các gợi ý", "xác nhận hàng loạt các gợi ý",

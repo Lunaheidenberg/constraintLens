@@ -2,16 +2,17 @@
 
 ## Current implementation
 
-React and Vite provide the scheduling interface. `frontend/src/main.tsx` mounts `App.tsx`, which owns one editable `SchedulingIR`, a project calendar, and a progress draft. `ProjectEditor.tsx` provides the member list, task table, task dialog, and Kanban board. Presets load as editable projects. Members have stable IDs, and users assign tasks manually. Removing a referenced member requires clearing or changing the affected assignments first.
+React and Vite provide the scheduling interface. `frontend/src/main.tsx` mounts `App.tsx`, which owns one editable `SchedulingIR`, a project calendar, and a progress draft. `ProjectEditor.tsx` provides the member list, inline-editable task table (name, duration, category, prerequisites, assignee), task dialog, and full-card draggable Kanban board with prerequisite warnings. Setup starts with a collapsible 3-step Quick Start card, a unified preset selector combining complete ready-to-run demos (`demoPresets.ts`) with server scenarios (`GET /api/presets`), browser `localStorage` persistence, JSON export/import (`projectStorage.ts`), and `DateField.tsx` quick actions (`Hôm nay`, clear button, month/year pickers). Members have stable IDs; removing a referenced member requires clearing or changing the affected assignments first.
 
-The task table, Kanban board, and `ProgressEditor.tsx` read the same task statuses. Moving a task to **Done** does not assign an actual date. `Schedule.tsx` renders planned intervals in calendar dates and confirmed completions as points with no inferred start or historical duration. The first accepted schedule is the baseline. `plans.ts` keeps the baseline, accepted schedule, and current proposal separate. Only explicit acceptance of a current, solved proposal that meets the optional deadline replaces the accepted schedule. Input edits cancel in-flight requests and discard proposals. Project start and structural edits mark the accepted plan outdated. Status edits leave its intervals intact. Deadline edits re-evaluate the accepted finish against the current due date and can expose an existing late schedule for revision. The accepted schedule remains available for reference.
+The task table, Kanban board, and `ProgressEditor.tsx` share task statuses. `ProgressEditor.tsx` supports inline status changes and explicit 1-click quick-fill buttons (`Theo kế hoạch`, `Dùng ngày báo cáo`, +/-1 day steppers) without ever inferring or auto-assigning `actual_finish_date`. Moving a task to **Done** never assigns an actual date automatically. `Schedule.tsx` renders planned intervals in calendar dates, overdue extensions beyond the deadline boundary, `Theo công việc` / `Theo thành viên` member swimlanes, and confirmed completions as points with no inferred start or historical duration. `plans.ts` keeps the baseline, accepted schedule, and current proposal separate, with sticky proposal acceptance controls on resolved schedules. Only explicit acceptance of a current, solved proposal that meets the optional deadline replaces the accepted schedule; input edits cancel in-flight requests and discard proposals.
 
-The UI sends HTTP/JSON requests to FastAPI. `App.tsx` currently uses the absolute base URL `http://localhost:8000`. Vite serves the frontend on port 5173 and defines a proxy for relative `/api` requests. The absolute calls bypass that proxy. `run_dev.bat` starts Uvicorn on port 8000 and Vite for local development.
+The UI sends HTTP/JSON scheduling requests to FastAPI (`http://localhost:8000` in dev, proxying `/api` in Vite). The assistant roles stay separate: `Hướng dẫn sử dụng` (`ApplicationGuide.tsx`) answers app usage questions, while `Trợ lý phân tích lịch` (`RecoveryAssistant.tsx`) opens in a non-obstructive side drawer with grounded 1–2 sentence `TL;DR` summaries for both proposals and accepted schedules. `run_dev.bat` starts Uvicorn on port 8000 and Vite for local development.
 
 | Endpoint | Behavior |
 |---|---|
 | `GET /api/presets` | Returns built-in scheduling scenarios from `api.py`. |
-| `POST /api/parse/draft` | Retains the T6 task extraction endpoint for Vietnamese or English text. Reads the Gemini API key on the server. |
+| `GET /api/ai/status` | Returns `{ configured, model }` indicating whether server or optional session `X-Gemini-Api-Key` header is ready, without exposing any key. |
+| `POST /api/parse/draft` | Retains the T6 task extraction endpoint for Vietnamese or English text. Reads the Gemini API key on the server or session header. |
 | `POST /api/planning/clarify` | Accepts a project description and returns a goal and up to three clarification questions. |
 | `POST /api/planning/draft` | Accepts the description and optional clarification answers. Returns a reviewable draft, field provenance, assumptions, and uncertainties. |
 | `GET /api/help/topics?workspace=setup\|planning\|recovery` | Returns suggested help questions for the active workspace. |
@@ -41,13 +42,15 @@ T5 previews the accepted plan against a valid rescheduling proposal. Acceptance 
 
 The React/FastAPI workflow keeps the editable project and the comparison snapshots in memory. The repository retains the legacy Streamlit entry point in `app.py`.
 
-### T7 AI planning and application help
+### T7 AI planning, BYOK, and application help
 
-React keeps the planning draft separate from the editable project. Duration and prerequisites carry a review state. Values grounded in the description or a clarification answer can be `provided`. A clear duration correction naming one task takes precedence over the description and records the answer's question ID. Unresolved duration conflicts leave the duration blank for manual entry. Bulk confirmation applies to concrete suggestions. An empty prerequisite list records a decision that no prerequisites are needed.
+React keeps the planning draft separate from the editable project. Duration, prerequisites, and optional member/assignee suggestions carry explicit review state (`provided`, `suggested`, `missing`, `confirmed`). Values grounded in the description or a clarification answer can be `provided`; a clear duration correction takes precedence over the description and records the question ID. Unresolved duration conflicts leave the duration blank for manual entry. Bulk confirmation applies to concrete suggestions (`Xác nhận các gợi ý`), and an empty prerequisite list records an explicit decision that no prerequisites are needed.
 
-React applies a validated draft only to a project without tasks, schedules, or progress. It checks this condition again when the confirmation response arrives. Applying the draft preserves the roster and calendar and adds unassigned To Do tasks. Help requests carry the question and workspace and leave project, progress, and schedule state intact.
+AI Planning supports two modes in `Cài đặt Gemini AI & BYOK`:
+- **Default server mode:** uses FastAPI (`/api/planning/clarify`, `/api/planning/draft`) with `.env` flexible parsing or optional `X-Gemini-Api-Key` session header.
+- **Zero-Server-Knowledge BYOK (`byokGemini.ts`):** keeps the user's API key strictly in React state (never `localStorage`, JSON exports, or server requests) and calls `generativelanguage.googleapis.com` directly from the browser using selectable Gemini `3.x` models via `x-goog-api-key`.
 
-Planning rejects invalid provider responses and keeps the user's description, edits, and active project available for retry. Selected transient provider errors get one retry on the same model. Draft review, presets, manual entry, scheduling, and local FAQs can run without Gemini.
+React applies a validated draft only to a project without tasks, schedules, or progress (warning early in `PlanningInput` if `applyBlocked` is non-empty, and re-checking when confirmation arrives). Applying the draft merges suggested draft members, keeps the calendar, and adds `To Do` tasks with verified or unassigned assignees. Help requests (`ApplicationGuide.tsx`) carry only the question and workspace and leave project, progress, and schedule state intact. Planning rejects invalid provider responses and preserves user inputs for retry. Draft review, presets, manual entry, scheduling, and local FAQs can run without Gemini.
 
 ### Historical T6 extraction
 
