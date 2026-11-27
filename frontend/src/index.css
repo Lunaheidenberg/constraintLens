@@ -318,8 +318,10 @@
     background: var(--inset);
     padding: 0.375rem;
   }
-  .planning-quick-calendar { min-width: 11.5rem; }
-  .planning-quick-calendar .date-field { gap: 0.2rem; font-size: 0.75rem; }
+  .planning-calendar-fields { display: grid; gap: 0.75rem; }
+  @media (min-width: 560px) {
+    .planning-calendar-fields { grid-template-columns: repeat(2, minmax(0, 16rem)); }
+  }
   .table-head { background: var(--inset); color: var(--muted); }
   .table-head th { font-weight: 600; }
   .data-table { font-size: 0.8125rem; line-height: 1.4; }

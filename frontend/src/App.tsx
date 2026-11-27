@@ -1343,16 +1343,9 @@ export default function App() {
               <div className="section-bar">
                 <div>
                   <SectionTitle id="solve-heading" icon={ChartGantt}>Lập lịch</SectionTitle>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <p className="helper">Bắt đầu: {calendar.project_start_date ? formatDate(calendar.project_start_date) : "Chưa chọn"} · Hạn: {calendar.target_deadline_date ? formatDate(calendar.target_deadline_date) : "Chưa đặt"}</p>
-                    <button className="text-link" onClick={() => goTo("setup", "calendar-heading")}>Chỉnh ngày</button>
-                  </div>
+                  <p className="helper mt-1">Chỉnh ngày trực tiếp tại đây (đồng bộ với Thiết lập), tính theo ngày dương lịch kể cả cuối tuần.</p>
                 </div>
-                <div className="flex flex-wrap items-end gap-2">
-                  <div className="planning-quick-calendar">
-                    <DateField label="Hạn chót nhanh" value={dateInputs.deadline} min={calendar.project_start_date || undefined}
-                      onChange={(value) => changeCalendar("deadline", value)} />
-                  </div>
+                <div className="flex flex-wrap items-center gap-2">
                   <button className="button" disabled={!!phase || localErrors.length > 0}
                     aria-describedby={localErrors.length ? "solve-requirements" : undefined} onClick={() => void validateProject(false)}>Kiểm tra</button>
                   <button className="button primary schedule-action" disabled={!!phase || localErrors.length > 0 || planningNeedsReport}
@@ -1363,6 +1356,12 @@ export default function App() {
                       : accepted || hasPlanningResult ? "Lập lịch lại" : "Tính lịch ban đầu"}
                   </button>
                 </div>
+              </div>
+              <div className="planning-calendar-fields">
+                <DateField label="Ngày bắt đầu dự án" value={dateInputs.start} required quickToday
+                  onChange={(value) => changeCalendar("start", value)} />
+                <DateField label="Hạn chót (tùy chọn)" value={dateInputs.deadline} min={calendar.project_start_date || undefined}
+                  onChange={(value) => changeCalendar("deadline", value)} />
               </div>
               {planningPhase === "validating" && <p className="helper">{REQUEST_STATUS.validating}</p>}
               {confirmedAsOf && <p className="helper">Báo cáo dùng để lập lại lịch: đã xác nhận đến hết <time dateTime={confirmedAsOf}>{formatDate(confirmedAsOf)}</time>.</p>}
