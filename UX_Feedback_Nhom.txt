@@ -1,0 +1,27 @@
+NHẬN XÉT UX & ĐỀ XUẤT CẦN SỬA - CONSTRAINTLENS
+
+1. TAB THIẾT LẬP & CHUNG
+- Thêm giới thiệu & hướng dẫn sử dụng nhanh (Quick Start 3 bước: Thiết lập -> Kế hoạch -> Tiến độ) cho người mới.
+- Lưu công việc thủ công từ tab Thiết lập xong phải có thông báo xác nhận ("Đã thêm [Mã task] vào Kế hoạch") kèm nút/link chuyển nhanh sang Kế hoạch (hiện tại đóng popup xong không thấy task đâu).
+- Chống mất dữ liệu khi F5/reload trang: tự lưu bằng localStorage + thêm nút Tạo dự án mới (Reset) + Xuất/Nhập file JSON (không cần dựng DB).
+- Hiển thị trạng thái Gemini API (đã có key / chưa cấu hình) và thêm chỗ cấu hình/nhập key dễ hơn trên UI; hỗ trợ đọc .env linh hoạt (bỏ khoảng trắng quanh dấu "=", đọc thêm GEMINI_DRAFT_MODEL).
+- Bộ chọn ngày (DateField): tự điền mặc định ngày hôm nay cho Ngày bắt đầu hoặc thêm nút "Hôm nay", thêm nút xóa nhanh hạn chót, chọn nhanh tháng/năm.
+- Cho phép sửa trực tiếp Tên dự án (hiện đang cố định chữ "Dự án mới").
+- Bổ sung 1-2 kịch bản mẫu (Preset) có sẵn ngày, thành viên và phân công để bấm chạy được ngay.
+
+2. TAB KẾ HOẠCH & BIỂU ĐỒ GANTT
+- Cho sửa trực tiếp (inline) Số ngày và Tên công việc ngay tại bảng Công việc ở tab Kế hoạch thay vì phải mở popup Chỉnh sửa từng dòng (giữ phần ID, tiên quyết và xóa trong popup).
+- Cho sửa nhanh Hạn chót ngay trong tab Kế hoạch (tránh phải nhảy ngược về tab Thiết lập).
+- Sau khi bấm "Tính lịch ban đầu" (hoặc "Đề xuất lịch mới") xong, trang tự động cuộn mượt xuống biểu đồ Gantt.
+- Hiện tại đặt thời lượng lố quá hạn chót vẫn cho qua bình thường:
+  + Trên Gantt: tô đỏ phần thanh công việc / đoạn thời gian vượt quá vạch Hạn chót.
+  + Ở bước Kiểm tra: thêm cảnh báo sớm (warning, không chặn cứng) nếu 1 task đơn lẻ dài hơn tổng quỹ thời gian từ ngày bắt đầu đến hạn chót (vẫn để CP-SAT chạy ra Gantt để người dùng thấy rõ trễ mấy ngày).
+- Nâng cấp Gantt: thêm chế độ xem theo Thành viên (Swimlane) để thấy rõ ràng buộc trùng người và thời gian chờ; hiện nhãn phụ thuộc ngắn (vd: <- T1, T2) thay vì giấu trong tooltip.
+- Bỏ hành vi tự động bật popup sửa task đầu tiên (T1) khi bấm nút "Điều chỉnh kế hoạch" ở cảnh báo trễ hạn.
+
+3. TAB TIẾN ĐỘ & TRỢ LÝ AI
+- Kanban: cho phép kéo-thả cả thẻ công việc thay vì chỉ kéo được ở icon 6 chấm bên trái.
+- Nút "Chấp nhận lịch / Hủy đề xuất": ghim cố định (sticky) hoặc đặt ở cả cuối bảng So sánh để đọc xong không phải cuộn ngược lên đầu.
+- AI Planning: cho Gemini hỏi thêm danh sách thành viên để điền nháp giúp vào dự án (vẫn giữ bước người dùng xác nhận/duyệt trước khi chạy lịch); báo sớm ngay từ đầu nếu dự án đang có task làm khóa nút Áp dụng bản nháp.
+- Trợ lý: phân biệt rõ tên & vai trò giữa "Hướng dẫn dùng app" và "Trợ lý phân tích lịch"; cho mở Trợ lý phân tích lịch cả sau khi đã Chấp nhận lịch, hiển thị dạng ngăn trượt bên cạnh (side drawer) kèm 1 dòng tóm tắt nhanh (TL;DR) để không đẩy Gantt trôi xuống dưới.
+- Dùng rối vl ;-;
